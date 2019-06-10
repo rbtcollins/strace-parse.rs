@@ -9,8 +9,31 @@ extern crate nom;
 extern crate error_chain;
 
 mod errors {
+    use std::fmt;
+
     // Create the Error, ErrorKind, ResultExt, and Result types
-    error_chain! {}
+    error_chain! {
+                errors {
+            NomError(desc: String) {
+                description("nom error")
+                display("nom error: '{}'", desc)
+            }
+        }
+    }
+
+    // Inspired by https://github.com/Geal/nom/issues/581
+    impl<E: fmt::Debug + Clone> From<nom::Err<E>> for Error {
+        fn from(error: nom::Err<E>) -> Self {
+            let desc = match &error {
+                nom::Err::Incomplete(needed) => format!("ran out of bytes: {:?}", needed),
+                nom::Err::Error(_) => format!("{:?}", error),
+                nom::Err::Failure(_) => format!("{:?}", error),
+            };
+
+            Error::from_kind(ErrorKind::NomError(desc))
+        }
+    }
+
 }
 
 pub mod raw {
@@ -54,6 +77,12 @@ pub mod raw {
 
     pub type Line = Result<Syscall>;
 
+    macro_rules! nom {
+        ($expr:expr) => {
+            $expr.map_err(Error::from)
+        };
+    }
+
     struct ParseLines<T: BufRead> {
         lines: T,
     }
@@ -67,8 +96,11 @@ pub mod raw {
             let len = self.lines.read_line(&mut line);
             let line = line.as_bytes();
             named!(t, do_parse!(a: take!(10) >> (a)));
-            match t(&line) {
-                _ => None,
+            let parsed = nom!(t(&line));
+
+            match parsed {
+                Ok(_) => None,
+                Err(e) => Some(Err(e)),
             }
         }
     }
@@ -235,7 +267,7 @@ mod tests {
                     result: "?".into(),
                 }),
                 start: Some(Duration::from_micros(
-                    59_000000 + (((23 * 60) + 59) * 60 * 1_000000)
+                    59_000000 + (((23 * 60) + 59) * 60 * 1_000000),
                 )),
                 stop: None,
                 duration: None,
@@ -244,7 +276,7 @@ mod tests {
                 pid: 2,
                 call: Call::Exited(0),
                 start: Some(Duration::from_micros(
-                    00_000001 + (((24 * 60) + 0) * 60 * 1_000000)
+                    00_000001 + (((24 * 60) + 0) * 60 * 1_000000),
                 )),
                 stop: None,
                 duration: None,
