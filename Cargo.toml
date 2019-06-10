@@ -1,0 +1,9 @@
+[package]
+name = "strace-parse"
+version = "0.1.0"
+authors = ["Robert Collins <robertc@robertcollins.net>"]
+edition = "2018"
+
+[dependencies]
+error-chain = "0"
+nom = "5.0.0-beta2" 
