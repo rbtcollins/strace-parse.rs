@@ -94,14 +94,19 @@ pub mod raw {
             start: Option<Duration>,
             duration: Option<Duration>,
         ) -> Self {
-            let stop = start.and_then(|start| duration.and_then(|duration| Some(start + duration)));
             Syscall {
                 pid,
                 call,
                 start,
-                stop,
+                stop: None,
                 duration,
             }
+        }
+
+        pub fn set_stop(&mut self) {
+            self.stop = self
+                .start
+                .and_then(|start| self.duration.and_then(|duration| Some(start + duration)));
         }
     }
 
@@ -111,11 +116,6 @@ pub mod raw {
         ($expr:expr) => {
             $expr.map_err(Error::from)
         };
-    }
-
-    struct ParseLines<T: BufRead> {
-        lines: T,
-        finished: bool,
     }
 
     mod parsers {
@@ -184,7 +184,7 @@ pub mod raw {
                 )
             );
 
-        // The start
+        // The duration ' <...>'
         named!(
                 pub parse_duration<&[u8], Option<Duration>>,
                 alt!(
@@ -281,6 +281,13 @@ pub mod raw {
         }
     }
 
+    struct ParseLines<T: BufRead> {
+        lines: T,
+        finished: bool,
+        last_start: Option<Duration>,
+        start_offset: Duration,
+    }
+
     impl<T: BufRead> Iterator for ParseLines<T> {
         type Item = Line;
 
@@ -337,7 +344,7 @@ pub mod raw {
             let parsed = nom!(parser(&line));
 
             match parsed {
-                Ok((remainder, value)) => {
+                Ok((remainder, mut value)) => {
                     if remainder.len() != 0 {
                         Some(Err(ErrorKind::NomError(
                             format!("unused input {:?}", std::str::from_utf8(remainder)).into(),
@@ -345,6 +352,24 @@ pub mod raw {
                         .into()))
                     } else {
                         println!("parsed: {:?}", value);
+                        match value.start {
+                            None => (),
+                            Some(start) => {
+                                match self.last_start {
+                                    None => {}
+                                    Some(last_start) => {
+                                        if last_start > start {
+                                            // rollover
+                                            // increment our offset by a day
+                                            self.start_offset += Duration::from_secs(86400);
+                                        }
+                                    }
+                                }
+                                self.last_start = value.start;
+                            }
+                        }
+                        value.start = value.start.map(|start| start + self.start_offset);
+                        value.set_stop();
                         Some(Ok(value))
                     }
                 }
@@ -357,6 +382,8 @@ pub mod raw {
         ParseLines {
             lines: BufReader::new(source),
             finished: false,
+            last_start: None,
+            start_offset: Duration::from_secs(0),
         }
     }
 }
@@ -503,7 +530,7 @@ mod tests {
     #[test]
     fn datemicrorollover() {
         let strace_content = r#"1 23:59:59.000000 exit_group(0)     = ?
-2 0:0:0.000001 +++ exited with 0 +++
+2 0:0:0.000001 +++ exited with 0 +++ <0.000058>
 "#
         .as_bytes();
         let parsed: Vec<super::raw::Line> = super::raw::parse(strace_content).collect();
@@ -527,8 +554,10 @@ mod tests {
                 start: Some(Duration::from_micros(
                     00_000001 + (((24 * 60) + 0) * 60 * 1_000000),
                 )),
-                stop: None,
-                duration: None,
+                stop: Some(Duration::from_micros(
+                    00_000001 + (((24 * 60) + 0) * 60 * 1_000000) + 58,
+                )),
+                duration: Some(Duration::from_micros(58)),
             }),
         ];
         assert_eq!(parsed.len(), expected.len());
