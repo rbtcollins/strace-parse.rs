@@ -87,6 +87,24 @@ pub mod raw {
         pub duration: Option<Duration>,
     }
 
+    impl Syscall {
+        pub fn new(
+            pid: u32,
+            call: Call,
+            start: Option<Duration>,
+            duration: Option<Duration>,
+        ) -> Self {
+            let stop = start.and_then(|start| duration.and_then(|duration| Some(start + duration)));
+            Syscall {
+                pid,
+                call,
+                start,
+                stop,
+                duration,
+            }
+        }
+    }
+
     pub type Line = Result<Syscall>;
 
     macro_rules! nom {
@@ -101,7 +119,7 @@ pub mod raw {
     }
 
     mod parsers {
-        use super::{Call, CallResult, GenericCall};
+        use super::{Call, CallResult, Duration, GenericCall};
         use nom::character::complete::digit1;
         use nom::{
             alt, char, complete, delimited, do_parse, is_a, is_not, map_res, named, opt, recognize,
@@ -166,6 +184,82 @@ pub mod raw {
                 )
             );
 
+        // The start
+        named!(
+                pub parse_duration<&[u8], Option<Duration>>,
+                alt!(
+                    do_parse!(
+                        tag!(" ") >>
+                        duration:
+                            delimited!(char!('<'),
+                                do_parse!(
+                                    s: map_res!(
+                                        map_res!(
+                                            digit1, std::str::from_utf8
+                                        ),
+                                        |s: &str| s.parse::<u64>()
+                                    ) >>
+                                    tag!(".") >>
+                                    micro: map_res!(
+                                        map_res!(
+                                            digit1, std::str::from_utf8
+                                        ),
+                                        |s: &str| s.parse::<u64>()
+                                    ) >>
+                            ((s * 1_000_000) + micro)
+                            ),
+                            char!('>')
+                        ) >>
+                        ( Some(Duration::from_micros(duration)))
+                    )
+                    |do_parse!((None))
+                )
+            );
+
+        // The start 20:03:49.406540
+        named!(
+                pub parse_start<&[u8], Option<Duration>>,
+                alt!(
+                    do_parse!(
+                        hour: map_res!(
+                                        map_res!(
+                                            digit1, std::str::from_utf8
+                                        ),
+                                        |s: &str| s.parse::<u64>()
+                                    ) >>
+                        tag!(":") >>
+                        minute: map_res!(
+                                        map_res!(
+                                            digit1, std::str::from_utf8
+                                        ),
+                                        |s: &str| s.parse::<u64>()
+                                    ) >>
+                        tag!(":") >>
+                        second: map_res!(
+                                        map_res!(
+                                            digit1, std::str::from_utf8
+                                        ),
+                                        |s: &str| s.parse::<u64>()
+                                    ) >>
+                        tag!(".") >>
+                        micros: map_res!(
+                                        map_res!(
+                                            digit1, std::str::from_utf8
+                                        ),
+                                        |s: &str| s.parse::<u64>()
+                                    ) >>
+                        tag!(" ") >>
+                        ( Some(Duration::from_micros(
+                            ((hour * 60
+                               + minute) * 60
+                               + second) * 1_000_000
+                               + micros
+                            )) )
+                    )
+                    |do_parse!((None))
+                )
+            );
+
         #[cfg(test)]
         mod tests {
             use super::*;
@@ -192,9 +286,7 @@ pub mod raw {
 
         fn next(&mut self) -> Option<Line> {
             use nom::character::complete::digit1;
-            use nom::{
-                alt, char, complete, delimited, do_parse, map_res, named, opt, tag, terminated,
-            };
+            use nom::{alt, complete, do_parse, map_res, named, opt, tag, terminated};
             use parsers::*;
 
             if self.finished {
@@ -233,44 +325,14 @@ pub mod raw {
                 )
             );
 
-            // The duration
-            named!(
-                parse_duration<&[u8], Option<Duration>>,
-                alt!(
-                    do_parse!(
-                        tag!(" ") >>
-                        duration:
-                            delimited!(char!('<'),
-                                do_parse!(
-                                    s: map_res!(
-                                        map_res!(
-                                            digit1, std::str::from_utf8
-                                        ),
-                                        |s: &str| s.parse::<u64>()
-                                    ) >>
-                                    tag!(".") >>
-                                    micro: map_res!(
-                                        map_res!(
-                                            digit1, std::str::from_utf8
-                                        ),
-                                        |s: &str| s.parse::<u64>()
-                                    ) >>
-                            ((s * 1_000_000) + micro)
-                            ),
-                            char!('>')
-                        ) >>
-                        ( Some(Duration::from_micros(duration)))
-                    )
-                    |do_parse!((None))
-                )
-            );
             named!(
                 parser<&[u8], Syscall>,
                 do_parse!(pid: parse_pid  >>
+                    start: parse_start >>
                     call: parse_call >>
                     duration: parse_duration >>
                     opt!(complete!(alt!(tag!("\n") | tag!("\r") | tag!("\r\n")))) >>
-                    (Syscall {pid, call: call, start: None, stop: None, duration}))
+                    (Syscall::new(pid, call, start, duration)))
             );
             let parsed = nom!(parser(&line));
 
@@ -410,7 +472,7 @@ mod tests {
                 duration: Some(Duration::from_micros(58)),
             }),
             Ok(Syscall {
-                pid: 15860,
+                pid: 16135,
                 call: Call::Generic(GenericCall {
                     call: "exit_group".into(),
                     args: vec!["0".into()],
@@ -423,7 +485,7 @@ mod tests {
                 duration: None,
             }),
             Ok(Syscall {
-                pid: 15860,
+                pid: 16135,
                 call: Call::Exited(0),
                 start: Some(Duration::from_micros(
                     50_070014 + (((20 * 60) + 12) * 60 * 1_000000),
