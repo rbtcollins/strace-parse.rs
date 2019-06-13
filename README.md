@@ -1,8 +1,10 @@
 # Parser for strace files
 
-NB: The recommended strace options include : -ttt -T - -ttt gives microsecond
-absolute timestamps, and -T gives syscall durations. Other options have various
-(poor) tradeoffs.
+NB: The recommended strace options include : -f -ttt -T -
+  -ttt gives microsecond absolute timestamps,
+  -T gives syscall durations.
+  -f follow forks (and threads); includes pids for single-thread processes too.
+Other options have various (poor) tradeoffs.
 
 # API
 

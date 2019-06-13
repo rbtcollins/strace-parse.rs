@@ -256,6 +256,23 @@ pub mod raw {
                                + micros
                             )) )
                     )
+                    |do_parse!(
+                        second: map_res!(
+                                        map_res!(
+                                            digit1, std::str::from_utf8
+                                        ),
+                                        |s: &str| s.parse::<u64>()
+                                    ) >>
+                        tag!(".") >>
+                        micros: map_res!(
+                                        map_res!(
+                                            digit1, std::str::from_utf8
+                                        ),
+                                        |s: &str| s.parse::<u64>()
+                                    ) >>
+                        tag!(" ") >>
+                        ( Some(Duration::from_micros(second * 1_000_000 + micros)) )
+                    )
                     |do_parse!((None))
                 )
             );
@@ -557,6 +574,39 @@ mod tests {
                 stop: Some(Duration::from_micros(
                     00_000001 + (((24 * 60) + 0) * 60 * 1_000000) + 58,
                 )),
+                duration: Some(Duration::from_micros(58)),
+            }),
+        ];
+        assert_eq!(parsed.len(), expected.len());
+        for (l, r) in parsed.into_iter().zip(expected.into_iter()) {
+            assert_eq!(l.unwrap(), r.unwrap());
+        }
+    }
+
+    #[test]
+    fn absmicros() {
+        let strace_content = r#"1 1560417690.065275 exit_group(0)     = ?
+2 1560417690.082832 +++ exited with 0 +++ <0.000058>
+"#
+        .as_bytes();
+        let parsed: Vec<super::raw::Line> = super::raw::parse(strace_content).collect();
+        let expected: Vec<super::raw::Line> = vec![
+            Ok(Syscall {
+                pid: 1,
+                call: Call::Generic(GenericCall {
+                    call: "exit_group".into(),
+                    args: vec!["0".into()],
+                    result: CallResult::Unknown,
+                }),
+                start: Some(Duration::from_micros(1560417690_065275)),
+                stop: None,
+                duration: None,
+            }),
+            Ok(Syscall {
+                pid: 2,
+                call: Call::Exited(0),
+                start: Some(Duration::from_micros(1560417690_082832)),
+                stop: Some(Duration::from_micros(1560417690_082832 + 58)),
                 duration: Some(Duration::from_micros(58)),
             }),
         ];
