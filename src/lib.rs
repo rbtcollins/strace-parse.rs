@@ -7,7 +7,7 @@ extern crate nom;
 #[macro_use]
 extern crate error_chain;
 
-mod errors {
+pub mod errors {
     use std::fmt;
 
     // Create the Error, ErrorKind, ResultExt, and Result types
@@ -146,6 +146,11 @@ pub mod raw {
                     do_parse!(val: map_res!(is_a!("0123456789xabcdef"), std::str::from_utf8) >> (CallResult::Value(val.into())))
                     | do_parse!(tag!("?") >> (CallResult::Unknown))
                     | do_parse!(tag!("<unfinished...>") >> (CallResult::Unfinished))
+                    | do_parse!(val: map_res!(recognize!(do_parse!(
+                        tag!("-") >> 
+                        is_not!(")") >>
+                        tag!(")") >>
+                        () )), std::str::from_utf8) >> (CallResult::Value(val.into())))
                 )
             );
 
@@ -294,6 +299,13 @@ pub mod raw {
 
                 let result = parse_exit_event(input);
                 assert_eq!(result, Ok((&b""[..], Call::Exited(0))));
+            }
+
+            #[test]
+            fn result_description() {
+                let input = &b"-1 ENOENT (No such file or directory)"[..];
+                let result = parse_result(input);
+                assert_eq!(result, Ok((&b""[..], CallResult::Value("-1 ENOENT (No such file or directory)".into()))));
             }
         }
     }
@@ -612,7 +624,7 @@ mod tests {
         ];
         assert_eq!(parsed.len(), expected.len());
         for (l, r) in parsed.into_iter().zip(expected.into_iter()) {
-            assert_eq!(l.unwrap(), r.unwrap());
+            assert_eq!(l.unwrap(), r.unwrap())
         }
     }
 }
