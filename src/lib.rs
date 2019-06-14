@@ -151,7 +151,7 @@ pub mod raw {
                         complete!(recognize!(
                             do_parse!(
                                 delimited!(char!('"'),
-                                escaped!(is_not!("\"\\"), '\\', one_of!("\"n\\0123456789rt")),
+                                escaped!(is_not!("\"\\"), '\\', one_of!("\"n\\0123456789rtx")),
                                 char!('"')) >>
                                 opt!(tag!("...")) >> ()
                                 ))) |
@@ -347,7 +347,8 @@ pub mod raw {
                     b" \"A\")",            // simple alpha
                     b" \"12\",",           // simple number
                     b" \"\\33(B\\33[m\")", // "\33(B\33[m"
-                    b" \"aqwe\"...," // truncated
+                    b" \"aqwe\"...,", // truncated
+                    b" \"\\x\")",     // \x - utf8 escape char.
                 ];
                 parse_inputs(inputs, parse_arg);
             }
