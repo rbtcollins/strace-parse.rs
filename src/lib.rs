@@ -150,7 +150,10 @@ pub mod raw {
                         complete!(recognize!(delimited!(char!('"'),
                                 escaped!(is_not!("\"\\"), '\\', one_of!("\"n\\0123456789rt")),
                                 char!('"')))) |
-                        complete!(tag!("NULL"))
+                        complete!(tag!("NULL")) |
+                        complete!(recognize!(
+                            is_a!("0123456789_|ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+                        ))
                     )
                     >> (arg)
             )
@@ -377,6 +380,16 @@ pub mod raw {
                     // The leading ' ' is weird, but the parser has that outside
                     // the opt and this lets us use the test helper. shrug.
                     b" NULL)",
+                ];
+                parse_inputs(inputs, parse_arg);
+            }
+
+            #[test]
+
+            fn parse_arg_symbols() {
+                let inputs: Vec<&[u8]> = vec![
+                    b" F_OK,",
+                    b" O_RDONLY|O_CLOEXEC)",
                 ];
                 parse_inputs(inputs, parse_arg);
             }
