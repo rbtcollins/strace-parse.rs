@@ -123,8 +123,18 @@ pub mod raw {
         use nom::character::complete::digit1;
         use nom::{
             alt, char, complete, delimited, do_parse, escaped, is_a, is_not, map_res, named,
-            one_of, opt, recognize, separated_list, tag,
+            one_of, opt, recognize, separated_list, tag, terminated, AsChar, InputTakeAtPosition,
         };
+
+        pub fn symbol1<'a, E: nom::error::ParseError<&'a [u8]>>(
+            input: &'a [u8],
+        ) -> nom::IResult<&'a [u8], &'a [u8], E> {
+            input.split_at_position1_complete(
+                |item| !(item.is_alpha() || item == b'_'),
+                nom::error::ErrorKind::Alpha,
+            )
+        }
+
         // Parse a single arg:
         // '6' | '"string\""' | [vector, of things] |
         // '0x1234213 /* 19 vars */ | NULL | F_OK |
@@ -133,8 +143,10 @@ pub mod raw {
             parse_arg,
             do_parse!(
                 opt!(complete!(tag!(" ")))
-                    >> arg: alt!(
-                        complete!(recognize!(do_parse!(
+                    >> r: recognize!(do_parse!(
+                        opt!(complete!(terminated!(symbol1, tag!("="))))
+                            >> arg: alt!(
+                                complete!(recognize!(do_parse!(
                             is_a!("0123456789abcdefx") >> 
                             tag!(" /* ") >> 
                             is_a!("0123456789") >>
@@ -162,8 +174,10 @@ pub mod raw {
                         complete!(recognize!(delimited!(char!('{'),
                                 separated_list!(tag!(","), map_res!(is_not!("},"), std::str::from_utf8)),
                                 char!('}'))))
-                    )
-                    >> (arg)
+                            )
+                            >> (arg)
+                    ))
+                    >> (r)
             )
         );
         named!(
@@ -334,7 +348,7 @@ pub mod raw {
                 assert_eq!(result, Ok((&b","[..], &b"2"[..])));
 
                 let inputs: Vec<&[u8]> = vec![
-                    b" 2)", // end of args
+                    b" 2)",  // end of args
                     b" -1,", // not end of args, negatives
                 ];
                 parse_inputs(inputs, parse_arg);
@@ -347,8 +361,8 @@ pub mod raw {
                     b" \"A\")",            // simple alpha
                     b" \"12\",",           // simple number
                     b" \"\\33(B\\33[m\")", // "\33(B\33[m"
-                    b" \"aqwe\"...,", // truncated
-                    b" \"\\x\")",     // \x - utf8 escape char.
+                    b" \"aqwe\"...,",      // truncated
+                    b" \"\\x\")",          // \x - utf8 escape char.
                 ];
                 parse_inputs(inputs, parse_arg);
             }
@@ -392,10 +406,7 @@ pub mod raw {
             #[test]
 
             fn parse_arg_symbols() {
-                let inputs: Vec<&[u8]> = vec![
-                    b" F_OK,",
-                    b" O_RDONLY|O_CLOEXEC)",
-                ];
+                let inputs: Vec<&[u8]> = vec![b" F_OK,", b" O_RDONLY|O_CLOEXEC)"];
                 parse_inputs(inputs, parse_arg);
             }
 
@@ -429,6 +440,24 @@ pub mod raw {
                         Call::Generic(GenericCall {
                             call: "write".into(),
                             args: vec!["2".into(), "\"\\33(B\\33[m\"".into(), "6".into()],
+                            result: CallResult::Value("6".into())
+                        })
+                    ))
+                );
+            }
+
+            #[test]
+            fn parse_call_named_arg() {
+                let input = &b"write(fred_hollows=2) = 6\n"[..];
+
+                let result = parse_call(input);
+                assert_eq!(
+                    result,
+                    Ok((
+                        &b"\n"[..],
+                        Call::Generic(GenericCall {
+                            call: "write".into(),
+                            args: vec!["fred_hollows=2".into()],
                             result: CallResult::Value("6".into())
                         })
                     ))
