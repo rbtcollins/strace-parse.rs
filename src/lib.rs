@@ -142,7 +142,7 @@ pub mod raw {
                             >> ()
                         ))) |
                         // simple number
-                        complete!(is_a!("0123456789abcdefx")) |
+                        complete!(is_a!("-0123456789abcdefx")) |
                         // It might be a vector ["foo", "bar"]
                         complete!(recognize!(delimited!(char!('['),
                                 separated_list!(tag!(","), map_res!(is_not!("],"), std::str::from_utf8)),
@@ -335,7 +335,7 @@ pub mod raw {
 
                 let inputs: Vec<&[u8]> = vec![
                     b" 2)", // end of args
-                    b" 1,", // not end of args
+                    b" -1,", // not end of args, negatives
                 ];
                 parse_inputs(inputs, parse_arg);
             }
