@@ -122,20 +122,35 @@ pub mod raw {
         use super::{Call, CallResult, Duration, GenericCall};
         use nom::character::complete::digit1;
         use nom::{
-            alt, char, complete, delimited, do_parse, is_a, is_not, map_res, named, opt, recognize,
-            separated_list, tag,
+            alt, char, complete, delimited, do_parse, escaped, is_a, is_not, map_res, named,
+            one_of, opt, recognize, separated_list, tag,
         };
+        // Parse a single arg:
+        // '6' | '"string\""' | [vector, of things] |
+        // '0x1234213 /* 19 vars */ | {...}
         named!(
             parse_arg,
             do_parse!(
                 opt!(complete!(tag!(" ")))
                     >> arg: alt!(
+                        complete!(recognize!(do_parse!(
+                            is_a!("0123456789abcdefx") >> 
+                            tag!(" /* ") >> 
+                            is_a!("0123456789") >>
+                            tag!(" vars */")
+                            >> ()
+                        ))) |
+                        // simple number
+                        complete!(is_a!("0123456789abcdefx")) |
                         // It might be a vector ["foo", "bar"]
-                        recognize!(delimited!(char!('['),
+                        complete!(recognize!(delimited!(char!('['),
                                 separated_list!(tag!(","), map_res!(is_not!("],"), std::str::from_utf8)),
-                                char!(']'))) |
+                                char!(']')))) |
                             // It might be a string "...."
-                            is_not!("(),")
+                        complete!(recognize!(delimited!(char!('"'),
+                                escaped!(is_not!("\"\\"), '\\', one_of!("\"n\\0123456789rt")),
+                                char!('"')))) |
+                        complete!(tag!("NULL"))
                     )
                     >> (arg)
             )
@@ -143,14 +158,14 @@ pub mod raw {
         named!(
                 parse_result<&[u8], CallResult>,
                 alt!(
-                    do_parse!(val: map_res!(is_a!("0123456789xabcdef"), std::str::from_utf8) >> (CallResult::Value(val.into())))
-                    | do_parse!(tag!("?") >> (CallResult::Unknown))
+                    do_parse!(tag!("?") >> (CallResult::Unknown))
                     | do_parse!(tag!("<unfinished...>") >> (CallResult::Unfinished))
-                    | do_parse!(val: map_res!(recognize!(do_parse!(
-                        tag!("-") >> 
+                    | complete!(do_parse!(val: map_res!(recognize!(do_parse!(
+                        alt!(tag!("-") | is_a!("0123456789xabcdef")) >> 
                         is_not!(")") >>
                         tag!(")") >>
-                        () )), std::str::from_utf8) >> (CallResult::Value(val.into())))
+                        () )), std::str::from_utf8) >> (CallResult::Value(val.into()))))
+                    | do_parse!(val: map_res!(is_a!("0123456789xabcdef"), std::str::from_utf8) >> (CallResult::Value(val.into())))
                 )
             );
 
@@ -285,12 +300,111 @@ pub mod raw {
         #[cfg(test)]
         mod tests {
             use super::*;
+
+            fn parse_inputs<F: Fn(&[u8]) -> nom::IResult<&[u8], &[u8]>>(
+                inputs: Vec<&[u8]>,
+                parse: F,
+            ) {
+                for input in inputs.into_iter() {
+                    let end = input.len() - 1;
+                    let input = &input[..];
+                    let expected = &input[1..end];
+                    let remainder = &input[end..];
+                    let result = parse(input);
+                    assert_eq!(result, Ok((remainder, expected)));
+                }
+            }
+
+            #[test]
+            fn parse_arg_int() {
+                let input = &b" 2,"[..];
+
+                let result = parse_arg(input);
+                assert_eq!(result, Ok((&b","[..], &b"2"[..])));
+
+                let inputs: Vec<&[u8]> = vec![
+                    b" 2)", // end of args
+                    b" 1,", // not end of args
+                ];
+                parse_inputs(inputs, parse_arg);
+            }
+
+            #[test]
+            fn parse_arg_string() {
+                let inputs: Vec<&[u8]> = vec![
+                    b" \"\"",             // Empty
+                    b" \"A\"",            // simple alpha
+                    b" \"12\"",           // simple number
+                    b" \"\\33(B\\33[m\"", // "\33(B\33[m"
+                ];
+                for input in inputs.into_iter() {
+                    let input = &input[..];
+                    let expected = &input[1..];
+                    let result = parse_arg(input);
+                    assert_eq!(result, Ok((&b""[..], expected)));
+                }
+            }
+
+            #[test]
+            fn parse_arg_vector() {
+                // ["./target/debug/rustup", "install", "nightly"],
+                let inputs: Vec<&[u8]> = vec![
+                    b" [],",            // Empty
+                    b" [])",            // Empty
+                    b" [\"a\"],",       // 1 element
+                    b" [\"a\", \"\"])", // 2 element2
+                    b" [1],",           // number elements
+                ];
+                parse_inputs(inputs, parse_arg);
+            }
+
+            #[test]
+            fn parse_arg_vars() {
+                // 0x7ffff2435d98 /* 19 vars */
+                let inputs: Vec<&[u8]> = vec![
+                    b" 0x7ffff2435d98 /* 19 vars */,", // not-last
+                    b" 0x7ffff2435d98 /* 19 vars */)", // last arg
+                ];
+                parse_inputs(inputs, parse_arg);
+            }
+
+            #[allow(non_snake_case)]
+            #[test]
+
+            fn parse_arg_NULL() {
+                // NULL
+                let inputs: Vec<&[u8]> = vec![
+                    // The leading ' ' is weird, but the parser has that outside
+                    // the opt and this lets us use the test helper. shrug.
+                    b" NULL)",
+                ];
+                parse_inputs(inputs, parse_arg);
+            }
+
             #[test]
             fn parse_call_exited() {
                 let input = &b"+++ exited with 0 +++"[..];
 
                 let result = parse_call(input);
                 assert_eq!(result, Ok((&b""[..], Call::Exited(0))));
+            }
+
+            #[test]
+            fn parse_call_write_6() {
+                let input = &b"write(2, \"\\33(B\\33[m\", 6) = 6\n"[..];
+
+                let result = parse_call(input);
+                assert_eq!(
+                    result,
+                    Ok((
+                        &b"\n"[..],
+                        Call::Generic(GenericCall {
+                            call: "write".into(),
+                            args: vec!["2".into(), "\"\\33(B\\33[m\"".into(), "6".into()],
+                            result: CallResult::Value("6".into())
+                        })
+                    ))
+                );
             }
 
             #[test]
@@ -302,10 +416,26 @@ pub mod raw {
             }
 
             #[test]
-            fn result_description() {
+            fn result_description1() {
                 let input = &b"-1 ENOENT (No such file or directory)"[..];
                 let result = parse_result(input);
-                assert_eq!(result, Ok((&b""[..], CallResult::Value("-1 ENOENT (No such file or directory)".into()))));
+                assert_eq!(
+                    result,
+                    Ok((
+                        &b""[..],
+                        CallResult::Value("-1 ENOENT (No such file or directory)".into())
+                    ))
+                );
+            }
+
+            #[test]
+            fn result_description2() {
+                let input = &b"0x1 (flags FD_CLOEXEC)"[..];
+                let result = parse_result(input);
+                assert_eq!(
+                    result,
+                    Ok((&b""[..], CallResult::Value("0x1 (flags FD_CLOEXEC)".into())))
+                );
             }
         }
     }
