@@ -127,7 +127,8 @@ pub mod raw {
         };
         // Parse a single arg:
         // '6' | '"string\""' | [vector, of things] |
-        // '0x1234213 /* 19 vars */ | {...}
+        // '0x1234213 /* 19 vars */ | NULL | F_OK |
+        // {..., ...}
         named!(
             parse_arg,
             do_parse!(
@@ -146,14 +147,17 @@ pub mod raw {
                         complete!(recognize!(delimited!(char!('['),
                                 separated_list!(tag!(","), map_res!(is_not!("],"), std::str::from_utf8)),
                                 char!(']')))) |
-                            // It might be a string "...."
+                        // It might be a string "...."
                         complete!(recognize!(delimited!(char!('"'),
                                 escaped!(is_not!("\"\\"), '\\', one_of!("\"n\\0123456789rt")),
                                 char!('"')))) |
                         complete!(tag!("NULL")) |
                         complete!(recognize!(
-                            is_a!("0123456789_|ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-                        ))
+                            is_a!("0123456789_|ABCDEFGHIJKLMNOPQRSTUVWXYZ"))) |
+                        // It might be a struct ["foo", "bar"]
+                        complete!(recognize!(delimited!(char!('{'),
+                                separated_list!(tag!(","), map_res!(is_not!("},"), std::str::from_utf8)),
+                                char!('}'))))
                     )
                     >> (arg)
             )
@@ -390,6 +394,16 @@ pub mod raw {
                 let inputs: Vec<&[u8]> = vec![
                     b" F_OK,",
                     b" O_RDONLY|O_CLOEXEC)",
+                ];
+                parse_inputs(inputs, parse_arg);
+            }
+
+            #[test]
+
+            fn parse_arg_structs() {
+                let inputs: Vec<&[u8]> = vec![
+                    b" {st_mode=S_IFREG|0644, st_size=36160, ...},",
+                    b" {st_mode=S_IFREG|0644, st_size=36160, ...})",
                 ];
                 parse_inputs(inputs, parse_arg);
             }
