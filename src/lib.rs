@@ -148,9 +148,13 @@ pub mod raw {
                                 separated_list!(tag!(","), map_res!(is_not!("],"), std::str::from_utf8)),
                                 char!(']')))) |
                         // It might be a string "...."
-                        complete!(recognize!(delimited!(char!('"'),
+                        complete!(recognize!(
+                            do_parse!(
+                                delimited!(char!('"'),
                                 escaped!(is_not!("\"\\"), '\\', one_of!("\"n\\0123456789rt")),
-                                char!('"')))) |
+                                char!('"')) >>
+                                opt!(tag!("...")) >> ()
+                                ))) |
                         complete!(tag!("NULL")) |
                         complete!(recognize!(
                             is_a!("0123456789_|ABCDEFGHIJKLMNOPQRSTUVWXYZ"))) |
@@ -339,17 +343,13 @@ pub mod raw {
             #[test]
             fn parse_arg_string() {
                 let inputs: Vec<&[u8]> = vec![
-                    b" \"\"",             // Empty
-                    b" \"A\"",            // simple alpha
-                    b" \"12\"",           // simple number
-                    b" \"\\33(B\\33[m\"", // "\33(B\33[m"
+                    b" \"\"1",             // Empty
+                    b" \"A\")",            // simple alpha
+                    b" \"12\",",           // simple number
+                    b" \"\\33(B\\33[m\")", // "\33(B\33[m"
+                    b" \"aqwe\"...," // truncated
                 ];
-                for input in inputs.into_iter() {
-                    let input = &input[..];
-                    let expected = &input[1..];
-                    let result = parse_arg(input);
-                    assert_eq!(result, Ok((&b""[..], expected)));
-                }
+                parse_inputs(inputs, parse_arg);
             }
 
             #[test]
