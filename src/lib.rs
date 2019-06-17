@@ -47,8 +47,6 @@ pub mod raw {
     pub enum CallResult {
         // TODO: convert to u64/pointer width ints perhaps?
         Value(String),
-        /// <unfinished ...>
-        Unfinished,
         /// ?
         Unknown,
     }
@@ -69,6 +67,10 @@ pub mod raw {
     pub enum Call {
         /// A generic unmodelled syscall was made
         Generic(GenericCall),
+        /// An incomplete call
+        Unfinished(String),
+        /// A resumed call
+        Resumed(String),
         /// The process exited
         Exited(u32),
     }
@@ -76,10 +78,11 @@ pub mod raw {
     #[derive(Clone, Hash, Eq, Debug, PartialEq)]
     pub struct Syscall {
         pub pid: u32,
-        pub call: Call,
         /// When the system call started, if known.
         pub start: Option<Duration>,
-        /// When the system call finished, if known.
+        pub call: Call,
+        /// When the system call finished, if known. (always inferred from
+        /// start+ duration).
         pub stop: Option<Duration>,
         /// Duration of the system call, if known. Note that duration may be known
         /// without knowing the start and stop as in the following example:
@@ -119,11 +122,13 @@ pub mod raw {
     }
 
     mod parsers {
-        use super::{Call, CallResult, Duration, GenericCall};
+        use super::{Call, CallResult, Duration, GenericCall, Syscall};
+        use crate::errors::*;
         use nom::character::complete::digit1;
         use nom::{
             alt, char, complete, delimited, do_parse, escaped, is_a, is_not, map_res, named,
-            one_of, opt, recognize, separated_list, tag, terminated, AsChar, InputTakeAtPosition,
+            one_of, opt, recognize, separated_list, tag, take_until1, terminated, tuple, AsChar,
+            InputTakeAtPosition,
         };
 
         pub fn symbol1<'a, E: nom::error::ParseError<&'a [u8]>>(
@@ -184,7 +189,6 @@ pub mod raw {
                 parse_result<&[u8], CallResult>,
                 alt!(
                     do_parse!(tag!("?") >> (CallResult::Unknown))
-                    | do_parse!(tag!("<unfinished...>") >> (CallResult::Unfinished))
                     | complete!(do_parse!(val: map_res!(recognize!(do_parse!(
                         alt!(tag!("-") | is_a!("0123456789xabcdef")) >> 
                         is_not!(")") >>
@@ -209,6 +213,23 @@ pub mod raw {
                             tag!(" +++")) >>
                         (Call::Exited(ret)))
         );
+
+        named!(eol, alt!(tag!("\r\n") | tag!("\n") | tag!("\r")));
+
+        //
+        named!(
+            parse_resumed<&[u8], Call>,
+                do_parse!(
+                    delimited!(tag!("<... "), symbol1, tag!(" resumed> ")) >>
+                        l: map_res!(
+                            recognize!(tuple!(
+                                take_until1!("\n"), // TODO: handle other EOL forms
+                                eol
+                            )),
+                            std::str::from_utf8) >>
+                        (Call::Resumed(l.into())))
+        );
+
         // The sys call fn(...) = xxx
         // Modelled entirely to avoid guessing: either we recognise it or we
         // do not.
@@ -216,6 +237,16 @@ pub mod raw {
                 pub parse_call<&[u8], Call>,
                 complete!(alt!(
                     do_parse!(e: parse_exit_event >> (e))
+                    | complete!(do_parse!(
+                        l: terminated!(
+                                    map_res!(take_until1!(" <unfinished ...>"),
+                             std::str::from_utf8),
+                                    tag!(" <unfinished ...>")) >>
+                        eol >>
+                        (Call::Unfinished(l.into())))
+                    )
+                    // <... epoll_wait resumed> ....
+                    | complete!(parse_resumed)
                     | do_parse!(
                         call: map_res!(is_not!("("), std::str::from_utf8) >>
                         args: delimited!(char!('('),
@@ -322,9 +353,74 @@ pub mod raw {
                 )
             );
 
+        /// The pid "1234 "
+        named!(parse_pid<&[u8], u32>,
+                map_res!(
+                    map_res!(
+                        terminated!(digit1, tag!(" ")),
+                        std::str::from_utf8
+                    ), |s: &str| s.parse::<u32>()
+                )
+            );
+
+        named!(
+                pub parser<&[u8], Syscall>,
+                do_parse!(pid: parse_pid  >>
+                    start: parse_start >>
+                    call: parse_call >>
+                    duration: parse_duration >>
+                    opt!(complete!(eol)) >>
+                    (Syscall::new(pid, call, start, duration)))
+            );
+
+        named!(
+            merge_parser<&[u8], Syscall>,
+            do_parse!(
+                call: parse_call >>
+                duration: parse_duration >>
+                opt!(complete!(eol)) >>
+                (Syscall::new(0, call, None, duration)))
+        );
+
+        /// Merge an unfinished and a resumed syscall.
+        /// The syscalls are needed to get the timing data, but the
+        /// knowledge of type from the union is embedded, so it can error :/.
+        /// If you have ideas on making this nicer let me know.
+        /// TODO? move into the higher layer module?
+        pub fn merge_resumed(unfinished: Syscall, resumed: Syscall) -> Result<Syscall> {
+            if unfinished.pid != resumed.pid {
+                return Err("pid mismatch".into());
+            }
+            let prefix = if let Call::Unfinished(prefix) = unfinished.call {
+                prefix
+            } else {
+                return Err("bad call in unfinished".into());
+            };
+            let suffix = if let Call::Resumed(suffix) = resumed.call {
+                suffix
+            } else {
+                return Err("bad call in resumed".into());
+            };
+
+            let line = prefix + &suffix;
+            let (remainder, mut value) = nom!(merge_parser(line.as_bytes()))?;
+            if remainder.len() != 0 {
+                return Err(ErrorKind::NomError(
+                    format!("unused input {:?}", std::str::from_utf8(remainder)).into(),
+                )
+                .into());
+            }
+            // Take the start and pid from the original call -
+            value.pid = unfinished.pid;
+            value.start = unfinished.start;
+            value.set_stop();
+            Ok(value)
+        }
+
         #[cfg(test)]
         mod tests {
             use super::*;
+            use crate::raw::Syscall;
 
             fn parse_inputs<F: Fn(&[u8]) -> nom::IResult<&[u8], &[u8]>>(
                 inputs: Vec<&[u8]>,
@@ -464,6 +560,60 @@ pub mod raw {
                 );
             }
 
+            // epoll_wait(4,  <unfinished ...>
+            // <... epoll_wait resumed> [], 1024, 0) = 0 <0.000542>
+            #[test]
+            fn parse_call_unfinished_resumed() -> Result<()> {
+                let input = &b"epoll_wait(4,  <unfinished ...>\n"[..];
+                let result = parse_call(input);
+                assert_eq!(
+                    result,
+                    Ok((&b""[..], Call::Unfinished("epoll_wait(4, ".into())))
+                );
+                let u = Syscall::new(1, result.unwrap().1, Some(Duration::from_secs(500)), None);
+
+                let input = &b"<... epoll_wait resumed> [], 1024, 0) = 0 <0.000542>\n"[..];
+                let result = parse_call(input);
+                assert_eq!(
+                    result,
+                    Ok((
+                        &b""[..],
+                        Call::Resumed("[], 1024, 0) = 0 <0.000542>\n".into())
+                    ))
+                );
+                let r = Syscall::new(1, result.unwrap().1, None, None);
+
+                let result = merge_resumed(u, r)?;
+                assert_eq!(
+                    result,
+                    Syscall {
+                        pid: 1,
+                        call: Call::Generic(GenericCall {
+                            call: "epoll_wait".into(),
+                            args: vec!["4".into(), "[]".into(), "1024".into(), "0".into()],
+                            result: CallResult::Value("0".into()),
+                        }),
+                        start: Some(Duration::from_secs(500)),
+                        stop: Some(Duration::from_micros(500_000542)),
+                        duration: Some(Duration::from_micros(542))
+                    }
+                );
+                Ok(())
+            }
+
+            #[test]
+            fn test_parse_resumed() {
+                let input = &b"<... epoll_wait resumed> [], 1024, 0) = 0 <0.000542>\n"[..];
+                let result = parse_resumed(input);
+                assert_eq!(
+                    result,
+                    Ok((
+                        &b""[..],
+                        Call::Resumed("[], 1024, 0) = 0 <0.000542>\n".into())
+                    ))
+                );
+            }
+
             #[test]
             fn parse_exited() {
                 let input = &b"+++ exited with 0 +++"[..];
@@ -508,8 +658,6 @@ pub mod raw {
         type Item = Line;
 
         fn next(&mut self) -> Option<Line> {
-            use nom::character::complete::digit1;
-            use nom::{alt, complete, do_parse, map_res, named, opt, tag, terminated};
             use parsers::*;
 
             if self.finished {
@@ -532,31 +680,12 @@ pub mod raw {
             }
             let line = line.as_bytes();
             println!("Read {:?}", std::str::from_utf8(line));
-            /// string conversion - pending
+            // string conversion - pending
             // macro_rules! to_str {
             //     ($expr:expr) => {
             //         map_res!($expr, std::str::from_utf8)
             //     };
             // }
-            /// The pid "1234 "
-            named!(parse_pid<&[u8], u32>,
-                map_res!(
-                    map_res!(
-                        terminated!(digit1, tag!(" ")),
-                        std::str::from_utf8
-                    ), |s: &str| s.parse::<u32>()
-                )
-            );
-
-            named!(
-                parser<&[u8], Syscall>,
-                do_parse!(pid: parse_pid  >>
-                    start: parse_start >>
-                    call: parse_call >>
-                    duration: parse_duration >>
-                    opt!(complete!(alt!(tag!("\n") | tag!("\r") | tag!("\r\n")))) >>
-                    (Syscall::new(pid, call, start, duration)))
-            );
             let parsed = nom!(parser(&line));
 
             match parsed {
