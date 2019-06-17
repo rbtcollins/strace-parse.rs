@@ -151,17 +151,17 @@ pub mod raw {
             do_parse!(
                 opt!(complete!(take_while!(is_space)))
                     >> r: recognize!(do_parse!(
-                        opt!(complete!(terminated!(symbol1, tag!("="))))
-                            >> 
+                        opt!(complete!(terminated!(symbol1, tag!("=")))) >>
                         opt!(complete!(tag!("&"))) >>
                             arg: alt!(
                                 // Commented hex
                                 complete!(recognize!(do_parse!(
-                            is_a!("0123456789abcdefx") >> 
-                            tag!(" /* ") >> 
+                            opt!(complete!(is_a!("0123456789abcdefx"))) >>
+                            opt!(complete!(tag!(" "))) >>
+                            tag!("/* ") >> 
                             opt!(complete!(is_a!("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_-:+"))) >>
                             opt!(complete!(tag!("???"))) >>
-                            opt!(complete!(tag!(" vars"))) >>
+                            opt!(alt!(complete!(tag!(" vars")) | complete!(tag!(" entries")) )) >>
                             tag!(" */")
                             >> ()
                         ))) |
@@ -523,6 +523,7 @@ pub mod raw {
                     b" 0x7ffff2435d98 /* 19 vars */)",              // last arg
                     b" 0x14 /* NLMSG_??? */,",                      // Enum comment
                     b" 1558857830 /* 2019-05-26T20:03:50+1200 */,", // datestamp comment
+                    b" /* 12 entries */,",                          // pure comemnt
                 ];
                 parse_inputs(inputs, parse_arg);
             }
