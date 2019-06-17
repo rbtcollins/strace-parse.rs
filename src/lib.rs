@@ -135,7 +135,7 @@ pub mod raw {
             input: &'a [u8],
         ) -> nom::IResult<&'a [u8], &'a [u8], E> {
             input.split_at_position1_complete(
-                |item| !(item.is_alpha() || item == b'_'),
+                |item| !(item.is_alphanum() || item == b'_'),
                 nom::error::ErrorKind::Alpha,
             )
         }
@@ -144,6 +144,7 @@ pub mod raw {
         // '6' | '"string\""' | [vector, of things] |
         // '0x1234213 /* 19 vars */ | NULL | F_OK |
         // {..., ...}
+        // {arg}
         named!(
             parse_arg,
             do_parse!(
@@ -151,6 +152,7 @@ pub mod raw {
                     >> r: recognize!(do_parse!(
                         opt!(complete!(terminated!(symbol1, tag!("="))))
                             >> arg: alt!(
+                                // Count of vars
                                 complete!(recognize!(do_parse!(
                             is_a!("0123456789abcdefx") >> 
                             tag!(" /* ") >> 
@@ -164,7 +166,7 @@ pub mod raw {
                         complete!(recognize!(delimited!(char!('['),
                                 separated_list!(tag!(","), map_res!(is_not!("],"), std::str::from_utf8)),
                                 char!(']')))) |
-                        // It might be a string "...."
+                        // It might be a string "blah"
                         complete!(recognize!(
                             do_parse!(
                                 delimited!(char!('"'),
@@ -172,19 +174,24 @@ pub mod raw {
                                 char!('"')) >>
                                 opt!(tag!("...")) >> ()
                                 ))) |
+                        // literal NULL
                         complete!(tag!("NULL")) |
+                        // a symbolic constant
                         complete!(recognize!(
                             is_a!("0123456789_|ABCDEFGHIJKLMNOPQRSTUVWXYZ"))) |
-                        // It might be a struct ["foo", "bar"]
+                        // It might be a struct {"foo", "bar"}
                         complete!(recognize!(delimited!(char!('{'),
-                                separated_list!(tag!(","), map_res!(is_not!("},"), std::str::from_utf8)),
-                                char!('}'))))
+                                separated_list!(tag!(","), parse_arg),
+                                char!('}')))) |
+                        // ellipsis
+                        complete!(tag!("..."))
                             )
                             >> (arg)
                     ))
                     >> (r)
             )
         );
+
         named!(
                 parse_result<&[u8], CallResult>,
                 alt!(
@@ -214,7 +221,10 @@ pub mod raw {
                         (Call::Exited(ret)))
         );
 
-        named!(eol, alt!(complete!(tag!("\r\n")) | complete!(tag!("\n")) | complete!(tag!("\r"))));
+        named!(
+            eol,
+            alt!(complete!(tag!("\r\n")) | complete!(tag!("\n")) | complete!(tag!("\r")))
+        );
 
         //
         named!(
@@ -490,7 +500,6 @@ pub mod raw {
 
             #[allow(non_snake_case)]
             #[test]
-
             fn parse_arg_NULL() {
                 // NULL
                 let inputs: Vec<&[u8]> = vec![
@@ -504,16 +513,30 @@ pub mod raw {
             #[test]
 
             fn parse_arg_symbols() {
-                let inputs: Vec<&[u8]> = vec![b" F_OK,", b" O_RDONLY|O_CLOEXEC)"];
+                let inputs: Vec<&[u8]> = vec![
+                    b" F_OK,",
+                    b" O_RDONLY|O_CLOEXEC)",
+                    b" st_mode=S_IFREG|0644)",
+                    b" st_size=36160,",
+                ];
                 parse_inputs(inputs, parse_arg);
             }
 
             #[test]
-
             fn parse_arg_structs() {
                 let inputs: Vec<&[u8]> = vec![
                     b" {st_mode=S_IFREG|0644, st_size=36160, ...},",
                     b" {st_mode=S_IFREG|0644, st_size=36160, ...})",
+                    b" {u32=4294967295, u64=18446744073709551615},",
+                ];
+                parse_inputs(inputs, parse_arg);
+            }
+
+            #[test]
+            fn parse_nested_structs() {
+                let inputs: Vec<&[u8]> = vec![
+                    b" {EPOLLIN|EPOLLET, {u32=4294967295, u64=18446744073709551615}},",
+                    b" {EPOLLIN|EPOLLET, {u32=4294967295, u64=18446744073709551615}})",
                 ];
                 parse_inputs(inputs, parse_arg);
             }
@@ -674,9 +697,7 @@ pub mod raw {
 
             #[test]
             fn test_parser() {
-                let inputs: Vec<&[u8]> = vec![
-                    b"1 set(0) <unfinished ...>\n",
-                ];
+                let inputs: Vec<&[u8]> = vec![b"1 set(0) <unfinished ...>\n"];
 
                 for input in inputs.into_iter() {
                     let input = &input[..];
