@@ -152,12 +152,14 @@ pub mod raw {
                     >> r: recognize!(do_parse!(
                         opt!(complete!(terminated!(symbol1, tag!("="))))
                             >> arg: alt!(
-                                // Count of vars
+                                // Commented hex
                                 complete!(recognize!(do_parse!(
                             is_a!("0123456789abcdefx") >> 
                             tag!(" /* ") >> 
-                            is_a!("0123456789") >>
-                            tag!(" vars */")
+                            opt!(complete!(symbol1)) >>
+                            opt!(complete!(tag!("???"))) >>
+                            opt!(complete!(tag!(" vars"))) >>
+                            tag!(" */")
                             >> ()
                         ))) |
                         // It might be a vector ["foo", "bar", arg]
@@ -515,6 +517,7 @@ pub mod raw {
                 let inputs: Vec<&[u8]> = vec![
                     b" 0x7ffff2435d98 /* 19 vars */,", // not-last
                     b" 0x7ffff2435d98 /* 19 vars */)", // last arg
+                    b" 0x14 /* NLMSG_??? */,", // Enum comment
                 ];
                 parse_inputs(inputs, parse_arg);
             }
