@@ -125,10 +125,11 @@ pub mod raw {
         use super::{Call, CallResult, Duration, GenericCall, Syscall};
         use crate::errors::*;
         use nom::character::complete::digit1;
+        use nom::character::is_space;
         use nom::{
             alt, char, complete, delimited, do_parse, escaped, is_a, is_not, map_res, named,
-            one_of, opt, recognize, separated_list, tag, take_until1, terminated, tuple, AsChar,
-            InputTakeAtPosition,
+            one_of, opt, recognize, separated_list, tag, take_until1, take_while, terminated,
+            tuple, AsChar, InputTakeAtPosition,
         };
 
         pub fn symbol1<'a, E: nom::error::ParseError<&'a [u8]>>(
@@ -148,7 +149,7 @@ pub mod raw {
         named!(
             parse_arg,
             do_parse!(
-                opt!(complete!(tag!(" ")))
+                opt!(complete!(take_while!(is_space)))
                     >> r: recognize!(do_parse!(
                         opt!(complete!(terminated!(symbol1, tag!("="))))
                             >> 
@@ -250,7 +251,7 @@ pub mod raw {
         named!(
             parse_resumed<&[u8], Call>,
                 do_parse!(
-                    delimited!(tag!("<... "), symbol1, tag!(" resumed> ")) >>
+                    delimited!(tag!("<... "), symbol1, tag!(" resumed>")) >>
                         l: map_res!(
                             recognize!(tuple!(
                                 take_until1!("\n"), // TODO: handle other EOL forms
@@ -476,9 +477,9 @@ pub mod raw {
                 assert_eq!(result, Ok((&b","[..], &b"2"[..])));
 
                 let inputs: Vec<&[u8]> = vec![
-                    b" 2)",  // end of args
-                    b" -1,", // not end of args, negatives
-                    b" 8192*1024)" // Multiplication ?
+                    b" 2)",         // end of args
+                    b" -1,",        // not end of args, negatives
+                    b" 8192*1024)", // Multiplication ?
                 ];
                 parse_inputs(inputs, parse_arg);
             }
@@ -518,9 +519,9 @@ pub mod raw {
             fn parse_arg_vars() {
                 // 0x7ffff2435d98 /* 19 vars */
                 let inputs: Vec<&[u8]> = vec![
-                    b" 0x7ffff2435d98 /* 19 vars */,", // not-last
-                    b" 0x7ffff2435d98 /* 19 vars */)", // last arg
-                    b" 0x14 /* NLMSG_??? */,", // Enum comment
+                    b" 0x7ffff2435d98 /* 19 vars */,",              // not-last
+                    b" 0x7ffff2435d98 /* 19 vars */)",              // last arg
+                    b" 0x14 /* NLMSG_??? */,",                      // Enum comment
                     b" 1558857830 /* 2019-05-26T20:03:50+1200 */,", // datestamp comment
                 ];
                 parse_inputs(inputs, parse_arg);
@@ -581,9 +582,7 @@ pub mod raw {
 
             #[test]
             fn parse_fn_calls() {
-                let inputs: Vec<&[u8]> = vec![
-                    b" st_rdev=makedev(1, 9),",
-                ];
+                let inputs: Vec<&[u8]> = vec![b" st_rdev=makedev(1, 9),"];
                 parse_inputs(inputs, parse_arg);
             }
 
@@ -649,7 +648,7 @@ pub mod raw {
                     result,
                     Ok((
                         &b""[..],
-                        Call::Resumed("[], 1024, 0) = 0 <0.000542>\n".into())
+                        Call::Resumed(" [], 1024, 0) = 0 <0.000542>\n".into())
                     ))
                 );
                 let r = Syscall::new(1, result.unwrap().1, None, None);
@@ -693,7 +692,7 @@ pub mod raw {
                     result,
                     Ok((
                         &b""[..],
-                        Call::Resumed("[], 1024, 0) = 0 <0.000542>\n".into())
+                        Call::Resumed(" [], 1024, 0) = 0 <0.000542>\n".into())
                     ))
                 );
             }
@@ -735,7 +734,10 @@ pub mod raw {
                 let result = parse_result(input);
                 assert_eq!(
                     result,
-                    Ok((&b""[..], CallResult::Value("1558857830 (2019-05-26T20:03:50+1200)".into())))
+                    Ok((
+                        &b""[..],
+                        CallResult::Value("1558857830 (2019-05-26T20:03:50+1200)".into())
+                    ))
                 );
             }
 
