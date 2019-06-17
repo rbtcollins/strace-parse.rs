@@ -214,7 +214,7 @@ pub mod raw {
                         (Call::Exited(ret)))
         );
 
-        named!(eol, alt!(tag!("\r\n") | tag!("\n") | tag!("\r")));
+        named!(eol, alt!(complete!(tag!("\r\n")) | complete!(tag!("\n")) | complete!(tag!("\r"))));
 
         //
         named!(
@@ -235,8 +235,8 @@ pub mod raw {
         // do not.
         named!(
                 pub parse_call<&[u8], Call>,
-                complete!(alt!(
-                    do_parse!(e: parse_exit_event >> (e))
+                alt!(
+                    complete!(do_parse!(e: parse_exit_event >> (e)))
                     | complete!(do_parse!(
                         l: terminated!(
                                     map_res!(take_until1!(" <unfinished ...>"),
@@ -247,7 +247,7 @@ pub mod raw {
                     )
                     // <... epoll_wait resumed> ....
                     | complete!(parse_resumed)
-                    | do_parse!(
+                    | complete!(do_parse!(
                         call: map_res!(is_not!("("), std::str::from_utf8) >>
                         args: delimited!(char!('('),
                               separated_list!(tag!(","), map_res!(parse_arg, std::str::from_utf8)),
@@ -264,7 +264,7 @@ pub mod raw {
         named!(
                 pub parse_duration<&[u8], Option<Duration>>,
                 alt!(
-                    do_parse!(
+                    complete!(do_parse!(
                         tag!(" ") >>
                         duration:
                             delimited!(char!('<'),
@@ -287,16 +287,17 @@ pub mod raw {
                             char!('>')
                         ) >>
                         ( Some(Duration::from_micros(duration)))
-                    )
+                    ))
                     |do_parse!((None))
                 )
             );
 
         // The start 20:03:49.406540
+        //           20:03:49.612486
         named!(
                 pub parse_start<&[u8], Option<Duration>>,
-                alt!(
-                    do_parse!(
+                opt!(alt!(
+                    complete!(do_parse!(
                         hour: map_res!(
                                         map_res!(
                                             digit1, std::str::from_utf8
@@ -325,14 +326,14 @@ pub mod raw {
                                         |s: &str| s.parse::<u64>()
                                     ) >>
                         tag!(" ") >>
-                        ( Some(Duration::from_micros(
+                        ( Duration::from_micros(
                             ((hour * 60
                                + minute) * 60
                                + second) * 1_000_000
                                + micros
-                            )) )
-                    )
-                    |do_parse!(
+                            ) )
+                    ))
+                    |complete!(do_parse!(
                         second: map_res!(
                                         map_res!(
                                             digit1, std::str::from_utf8
@@ -347,20 +348,21 @@ pub mod raw {
                                         |s: &str| s.parse::<u64>()
                                     ) >>
                         tag!(" ") >>
-                        ( Some(Duration::from_micros(second * 1_000_000 + micros)) )
+                        ( Duration::from_micros(second * 1_000_000 + micros) )
                     )
-                    |do_parse!((None))
+                    )
+                    )
                 )
             );
 
         /// The pid "1234 "
         named!(parse_pid<&[u8], u32>,
-                map_res!(
+                complete!(map_res!(
                     map_res!(
                         terminated!(digit1, tag!(" ")),
                         std::str::from_utf8
                     ), |s: &str| s.parse::<u32>()
-                )
+                ))
             );
 
         named!(
@@ -602,6 +604,19 @@ pub mod raw {
             }
 
             #[test]
+            fn parse_call_unfinished() {
+                let input = &b"set_robust_list(0x7f1c43b009e0, 24 <unfinished ...>\n"[..];
+                let result = parse_call(input);
+                assert_eq!(
+                    result,
+                    Ok((
+                        &b""[..],
+                        Call::Unfinished("set_robust_list(0x7f1c43b009e0, 24".into())
+                    ))
+                );
+            }
+
+            #[test]
             fn test_parse_resumed() {
                 let input = &b"<... epoll_wait resumed> [], 1024, 0) = 0 <0.000542>\n"[..];
                 let result = parse_resumed(input);
@@ -643,6 +658,43 @@ pub mod raw {
                     result,
                     Ok((&b""[..], CallResult::Value("0x1 (flags FD_CLOEXEC)".into())))
                 );
+            }
+
+            #[test]
+            fn test_parse_start() {
+                let inputs: Vec<(&[u8], Duration)> =
+                    vec![(b"20:03:49.612486 ", Duration::from_micros(72229_612_486))];
+
+                for (input, expected) in inputs.into_iter() {
+                    let input = &input[..];
+                    let result = parse_start(input);
+                    assert_eq!(result, Ok((&b""[..], Some(expected))));
+                }
+            }
+
+            #[test]
+            fn test_parser() {
+                let inputs: Vec<&[u8]> = vec![
+                    b"1 set(0) <unfinished ...>\n",
+                ];
+
+                for input in inputs.into_iter() {
+                    let input = &input[..];
+                    let result = parser(input);
+                    assert_eq!(
+                        result,
+                        Ok((
+                            &b""[..],
+                            Syscall {
+                                pid: 1,
+                                call: Call::Unfinished("set(0)".into()),
+                                start: None,
+                                stop: None,
+                                duration: None
+                            }
+                        ))
+                    );
+                }
             }
         }
     }
