@@ -7,3 +7,4 @@ edition = "2018"
 [dependencies]
 error-chain = "0"
 nom = "5.0.0-beta2" 
+threadpool = "1"

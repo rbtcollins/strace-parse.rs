@@ -40,7 +40,13 @@ pub mod errors {
 
 pub mod raw {
     use crate::errors::*;
+
+    use std::cell::Cell;
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+    use std::collections::HashMap;
     use std::io::{BufRead, BufReader, Read};
+    use std::sync::mpsc::{channel, Receiver, Sender};
     use std::time::Duration;
 
     #[derive(Clone, Hash, Eq, Debug, PartialEq)]
@@ -81,7 +87,7 @@ pub mod raw {
         /// When the system call started, if known.
         pub start: Option<Duration>,
         pub call: Call,
-        /// When the system call finished, if known. (always inferred from
+        /// When the system call finished_reading, if known. (always inferred from
         /// start+ duration).
         pub stop: Option<Duration>,
         /// Duration of the system call, if known. Note that duration may be known
@@ -779,59 +785,34 @@ pub mod raw {
         }
     }
 
+    type Pool = std::cell::Cell<threadpool::ThreadPool>;
+    type SendHandle = Sender<(u64, Line)>;
+    type RecvHandle = Receiver<(u64, Line)>;
+
     struct ParseLines<T: BufRead> {
         lines: T,
-        finished: bool,
+        finished_reading: bool,
         last_start: Option<Duration>,
         start_offset: Duration,
+        threadpool: Pool,
+        serial: u64,
+        next_yield: u64,
+        send: SendHandle,
+        recv: RecvHandle,
+        pending_heap: BinaryHeap<Reverse<u64>>,
+        pending_lines: HashMap<u64, Line>,
     }
 
-    impl<T: BufRead> Iterator for ParseLines<T> {
-        type Item = Line;
-
-        fn next(&mut self) -> Option<Line> {
-            use parsers::*;
-
-            if self.finished {
-                return None;
-            }
-            let mut line = String::new();
-            // TODO: switch to read_until to deal with non-UTF8 strings in the strace.
-            let len = self.lines.read_line(&mut line);
-            match len {
-                Ok(len) => {
-                    if len == 0 {
-                        self.finished = true;
-                        return None;
-                    }
-                }
-                Err(e) => {
-                    self.finished = true;
-                    return Some(Err(e.into()));
-                }
-            }
-            let line = line.as_bytes();
-            println!("Read {:?}", std::str::from_utf8(line));
-            // string conversion - pending
-            // macro_rules! to_str {
-            //     ($expr:expr) => {
-            //         map_res!($expr, std::str::from_utf8)
-            //     };
-            // }
-            let parsed = nom!(parser(&line));
-
-            match parsed {
-                Ok((remainder, mut value)) => {
-                    if remainder.len() != 0 {
-                        Some(Err(ErrorKind::NomError(
-                            format!("unused input {:?}", std::str::from_utf8(remainder)).into(),
-                        )
-                        .into()))
-                    } else {
-                        println!("parsed: {:?}", value);
-                        match value.start {
-                            None => (),
-                            Some(start) => {
+    impl<T: BufRead> ParseLines<T> {
+        fn adjust_line(&mut self, parsed: Line) -> Option<Line> {
+            self.next_yield += 1;
+            return match parsed {
+                Ok(mut value) => {
+                    //println!("parsed: {:?}", value);
+                    match value.start {
+                        None => (),
+                        Some(start) => {
+                            if start < Duration::from_secs(86402) {
                                 match self.last_start {
                                     None => {}
                                     Some(last_start) => {
@@ -844,23 +825,175 @@ pub mod raw {
                                 }
                                 self.last_start = value.start;
                             }
+                            value.start = value.start.map(|start| start + self.start_offset);
+                            value.set_stop();
                         }
-                        value.start = value.start.map(|start| start + self.start_offset);
-                        value.set_stop();
-                        Some(Ok(value))
                     }
+                    Some(Ok(value))
                 }
                 Err(e) => Some(Err(e)),
+            };
+        }
+
+        fn finish_reading(&mut self) {
+            self.finished_reading = true;
+            // bit ugly but gets a replacement handle to make
+            // the current one close (and let blocking iteration
+            // terminate correctly)
+            let (send, _recv) = channel();
+            std::mem::replace(&mut self.send, send);
+        }
+
+        fn dispatch_line(&mut self) -> Result<()> {
+            use parsers::*;
+            let mut line = String::new();
+            // TODO: switch to read_until to deal with non-UTF8 strings in
+            // the strace.
+            let len = self.lines.read_line(&mut line);
+            match len {
+                Ok(len) => {
+                    if len == 0 {
+                        self.finish_reading();
+                        return Ok(());
+                    }
+                }
+                Err(e) => {
+                    self.finish_reading();
+                    return Err(e.into());
+                }
+            }
+            let id = self.serial;
+            self.serial += 1;
+            let send = self.send.clone();
+            self.threadpool.get_mut().execute(move || {
+                let line = line.as_bytes();
+                let parsed = nom!(parser(&line));
+                let result = match parsed {
+                    Ok((remainder, value)) => {
+                        if remainder.len() != 0 {
+                            Err(ErrorKind::NomError(
+                                format!("unused input {:?}", std::str::from_utf8(remainder)).into(),
+                            )
+                            .into())
+                        } else {
+                            Ok(value)
+                        }
+                    }
+                    Err(e) => {
+                        println!("Failed {:?}", std::str::from_utf8(line));
+                        Err(e)
+                    }
+                };
+                send.send((id, result)).expect("receiver must not quit");
+            });
+            Ok(())
+        }
+
+        fn dispatch_lines(&mut self) -> Option<Option<Line>> {
+            for _ in 1..self.threadpool.get_mut().max_count() {
+                if !self.finished_reading {
+                    if let Err(e) = self.dispatch_line() {
+                        return Some(Some(Err(e)));
+                    }
+                }
+            }
+            None
+        }
+    }
+
+    impl<T: BufRead> Iterator for ParseLines<T> {
+        type Item = Line;
+
+        fn next(&mut self) -> Option<Line> {
+            // Each line can be parsed separately.
+            // next() thus does the following:
+            // 0) try to pick up *a* line and submit it
+            // 1) look for the next result in the completed cache
+            // 2) alternate between iterating completed values
+            //    looking for the next result
+            // 3) when there is no more input, close the
+            //    mpsc input handle to permit blocking reads
+            // This isn't free-threading the reads to avoid just bloating all
+            // memory all at once; that would be a possible future change.
+            if let Some(e) = self.dispatch_lines() {
+                return e;
+            }
+
+            if let Some(available) = self.pending_heap.peek() {
+                if available.0 == self.next_yield {
+                    self.pending_heap.pop();
+                    let parsed = self.pending_lines.remove(&self.next_yield).unwrap();
+                    return self.adjust_line(parsed);
+                }
+            }
+
+            loop {
+                // perhaps the line we want is waiting in the mpsc queue
+                for (id, parsed) in self.recv.try_iter() {
+                    if id != self.next_yield {
+                        // stash this line for later processing
+                        self.pending_heap.push(Reverse(id));
+                        self.pending_lines.insert(id, parsed);
+                        continue;
+                    }
+                    return self.adjust_line(parsed);
+                }
+                // but if not, lets send another line for processing, todo: give
+                // up CPU when the queue grows (e.g. single core machines)
+                if let Some(e) = self.dispatch_lines() {
+                    return e;
+                }
+                if self.finished_reading {
+                    // We've finished reading, so there is nothing to do but
+                    // wait for the line we want.
+                    for (id, parsed) in self.recv.iter() {
+                        if id != self.next_yield {
+                            // stash this line for later processing
+                            self.pending_heap.push(Reverse(id));
+                            self.pending_lines.insert(id, parsed);
+                            continue;
+                        }
+                        return self.adjust_line(parsed);
+                    }
+                    // And if we reach here there are no more lines.
+                    return None;
+                }
             }
         }
     }
 
     pub fn parse<T: Read>(source: T) -> impl Iterator<Item = Line> {
+        let pool = Cell::new(threadpool::ThreadPool::default());
+        let (send, recv) = channel();
         ParseLines {
             lines: BufReader::new(source),
-            finished: false,
+            finished_reading: false,
             last_start: None,
             start_offset: Duration::from_secs(0),
+            threadpool: pool,
+            serial: 0,
+            next_yield: 0,
+            send,
+            recv,
+            pending_heap: BinaryHeap::default(),
+            pending_lines: HashMap::default(),
+        }
+    }
+
+    pub fn parse_with_pool<T: Read>(source: T, threadpool: Pool) -> impl Iterator<Item = Line> {
+        let (send, recv) = channel();
+        ParseLines {
+            lines: BufReader::new(source),
+            finished_reading: false,
+            last_start: None,
+            start_offset: Duration::from_secs(0),
+            threadpool,
+            serial: 0,
+            next_yield: 0,
+            send,
+            recv,
+            pending_heap: BinaryHeap::default(),
+            pending_lines: HashMap::default(),
         }
     }
 }
