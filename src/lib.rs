@@ -172,7 +172,7 @@ pub mod raw {
                         complete!(recognize!(
                             do_parse!(
                                 delimited!(char!('"'),
-                                escaped!(is_not!("\"\\"), '\\', one_of!("\"n\\0123456789rtx")),
+                                escaped!(is_not!("\"\\"), '\\', one_of!("\"n\\0123456789rtxf")),
                                 char!('"')) >>
                                 opt!(tag!("...")) >> ()
                                 ))) |
@@ -188,9 +188,9 @@ pub mod raw {
                                 ()
                                 )
                         )) |
-                        // a symbolic constant or simple number
+                        // a symbolic constant or simple number or mapping? (12->34)
                         complete!(recognize!(
-                            is_a!("0123456789_|ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-*"))) |
+                            is_a!("0123456789_|ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz->*"))) |
                         // It might be a struct {"foo", "bar"}
                         complete!(recognize!(delimited!(char!('{'),
                                 separated_list!(tag!(","), parse_arg),
@@ -488,6 +488,7 @@ pub mod raw {
                     b" \"\\33(B\\33[m\")", // "\33(B\33[m"
                     b" \"aqwe\"...,",      // truncated
                     b" \"\\x\")",          // \x - utf8 escape char.
+                    b" \"R9\\203\\200\\0\\1\\0\\t\\0\\f\\0\\0\\6static\\trust-lang\\3or\"...,", // 
                 ];
                 parse_inputs(inputs, parse_arg);
             }
@@ -502,7 +503,8 @@ pub mod raw {
                     b" [\"a\", \"\"])", // 2 element2
                     b" [1],",           // number elements
                     b" [{msg_hdr={msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base=\" l\\1\\0\\0\\1\\0\\0\\0\\0\\0\\0\\6static\\trust-lang\\3or\"..., iov_len=38}], msg_iovlen=1, msg_controllen=0, msg_flags=MSG_TRUNC|MSG_DONTWAIT|MSG_FIN|MSG_SYN|MSG_CONFIRM|MSG_ZEROCOPY|MSG_FASTOPEN|0x10000010}, msg_len=38}, {msg_hdr={msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base=\"R9\\1\\0\\0\\1\\0\\0\\0\\0\\0\\0\\6static\\trust-lang\\3or\"..., iov_len=38}], msg_iovlen=1, msg_controllen=0, msg_flags=MSG_EOR|MSG_WAITALL|MSG_NOSIGNAL|MSG_MORE|MSG_BATCH|MSG_CMSG_CLOEXEC|0x38a0000}, msg_len=38}],",
-                    b" [RTMIN RT_1]," // space delimited
+                    b" [RTMIN RT_1],", // space delimited
+                    b" [28->16],", // Mappings?
                 ];
                 parse_inputs(inputs, parse_arg);
             }
