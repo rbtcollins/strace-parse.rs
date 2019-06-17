@@ -176,7 +176,7 @@ pub mod raw {
                         complete!(recognize!(
                             do_parse!(
                                 delimited!(char!('"'),
-                                escaped!(is_not!("\"\\"), '\\', one_of!("\"n\\0123456789rtxf")),
+                                escaped!(is_not!("\"\\"), '\\', one_of!("\"n\\0123456789vrtxf")),
                                 char!('"')) >>
                                 opt!(tag!("...")) >> ()
                                 ))) |
@@ -492,7 +492,8 @@ pub mod raw {
                     b" \"\\33(B\\33[m\")", // "\33(B\33[m"
                     b" \"aqwe\"...,",      // truncated
                     b" \"\\x\")",          // \x - utf8 escape char.
-                    b" \"R9\\203\\200\\0\\1\\0\\t\\0\\f\\0\\0\\6static\\trust-lang\\3or\"...,", // 
+                    b" \"R9\\203\\200\\0\\1\\0\\t\\0\\f\\0\\0\\6static\\trust-lang\\3or\"...,",
+                    b" \"\\v\\0\\22\"...,",
                 ];
                 parse_inputs(inputs, parse_arg);
             }
