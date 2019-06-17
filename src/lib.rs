@@ -158,7 +158,7 @@ pub mod raw {
                                 complete!(recognize!(do_parse!(
                             is_a!("0123456789abcdefx") >> 
                             tag!(" /* ") >> 
-                            opt!(complete!(symbol1)) >>
+                            opt!(complete!(is_a!("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_-:+"))) >>
                             opt!(complete!(tag!("???"))) >>
                             opt!(complete!(tag!(" vars"))) >>
                             tag!(" */")
@@ -521,6 +521,7 @@ pub mod raw {
                     b" 0x7ffff2435d98 /* 19 vars */,", // not-last
                     b" 0x7ffff2435d98 /* 19 vars */)", // last arg
                     b" 0x14 /* NLMSG_??? */,", // Enum comment
+                    b" 1558857830 /* 2019-05-26T20:03:50+1200 */,", // datestamp comment
                 ];
                 parse_inputs(inputs, parse_arg);
             }
@@ -725,6 +726,16 @@ pub mod raw {
                 assert_eq!(
                     result,
                     Ok((&b""[..], CallResult::Value("0x1 (flags FD_CLOEXEC)".into())))
+                );
+            }
+
+            #[test]
+            fn result_timestamp() {
+                let input = &b"1558857830 (2019-05-26T20:03:50+1200)"[..];
+                let result = parse_result(input);
+                assert_eq!(
+                    result,
+                    Ok((&b""[..], CallResult::Value("1558857830 (2019-05-26T20:03:50+1200)".into())))
                 );
             }
 
