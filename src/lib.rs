@@ -79,6 +79,8 @@ pub mod raw {
         Resumed(String),
         /// The process exited
         Exited(u32),
+        /// The process was signalled
+        Signalled(String),
     }
 
     #[derive(Clone, Hash, Eq, Debug, PartialEq)]
@@ -267,6 +269,19 @@ pub mod raw {
                         (Call::Resumed(l.into())))
         );
 
+        // Signall events
+        // --- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=16135, si_uid=1000, si_status=0, si_utime=0, si_stime=0} ---
+        named!(
+            parse_signalled<&[u8], Call>,
+            delimited!(tag!("--- "),
+            do_parse!(
+                symbol1 >> 
+                v: map_res!(parse_arg, std::str::from_utf8) >>
+                (Call::Signalled(v.into()))
+
+            ),tag!(" ---"))
+        );
+
         // The sys call fn(...) = xxx
         // Modelled entirely to avoid guessing: either we recognise it or we
         // do not.
@@ -284,6 +299,7 @@ pub mod raw {
                     )
                     // <... epoll_wait resumed> ....
                     | complete!(parse_resumed)
+                    | complete!(parse_signalled)
                     | complete!(do_parse!(
                         call: map_res!(is_not!("("), std::str::from_utf8) >>
                         args: delimited!(char!('('),
@@ -599,6 +615,13 @@ pub mod raw {
 
                 let result = parse_call(input);
                 assert_eq!(result, Ok((&b""[..], Call::Exited(0))));
+            }
+
+            #[test]
+            fn parse_call_signalled() {
+                let input = &b"--- SIGCHLD {si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=16135, si_uid=1000, si_status=0, si_utime=0, si_stime=0} ---"[..];
+                let result = parse_call(input);
+                assert_eq!(result, Ok((&b""[..], Call::Signalled("{si_signo=SIGCHLD, si_code=CLD_EXITED, si_pid=16135, si_uid=1000, si_status=0, si_utime=0, si_stime=0}".into()))));
             }
 
             #[test]
