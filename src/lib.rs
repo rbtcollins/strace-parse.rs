@@ -160,9 +160,9 @@ pub mod raw {
                             tag!(" vars */")
                             >> ()
                         ))) |
-                        // It might be a vector ["foo", "bar"]
+                        // It might be a vector ["foo", "bar", arg]
                         complete!(recognize!(delimited!(char!('['),
-                                separated_list!(tag!(","), map_res!(is_not!("],"), std::str::from_utf8)),
+                                separated_list!(tag!(","), parse_arg),
                                 char!(']')))) |
                         // It might be a string "blah"
                         complete!(recognize!(
@@ -497,6 +497,7 @@ pub mod raw {
                     b" [\"a\"],",       // 1 element
                     b" [\"a\", \"\"])", // 2 element2
                     b" [1],",           // number elements
+                    b" [{msg_hdr={msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base=\" l\\1\\0\\0\\1\\0\\0\\0\\0\\0\\0\\6static\\trust-lang\\3or\"..., iov_len=38}], msg_iovlen=1, msg_controllen=0, msg_flags=MSG_TRUNC|MSG_DONTWAIT|MSG_FIN|MSG_SYN|MSG_CONFIRM|MSG_ZEROCOPY|MSG_FASTOPEN|0x10000010}, msg_len=38}, {msg_hdr={msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base=\"R9\\1\\0\\0\\1\\0\\0\\0\\0\\0\\0\\6static\\trust-lang\\3or\"..., iov_len=38}], msg_iovlen=1, msg_controllen=0, msg_flags=MSG_EOR|MSG_WAITALL|MSG_NOSIGNAL|MSG_MORE|MSG_BATCH|MSG_CMSG_CLOEXEC|0x38a0000}, msg_len=38}],",
                 ];
                 parse_inputs(inputs, parse_arg);
             }
