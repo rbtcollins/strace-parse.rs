@@ -151,7 +151,9 @@ pub mod raw {
                 opt!(complete!(tag!(" ")))
                     >> r: recognize!(do_parse!(
                         opt!(complete!(terminated!(symbol1, tag!("="))))
-                            >> arg: alt!(
+                            >> 
+                        opt!(complete!(tag!("&"))) >>
+                            arg: alt!(
                                 // Commented hex
                                 complete!(recognize!(do_parse!(
                             is_a!("0123456789abcdefx") >> 
@@ -542,6 +544,7 @@ pub mod raw {
                     b" st_mode=S_IFREG|0644)",
                     b" st_size=36160,",
                     b" echo,",
+                    b" &sin6_addr,",
                 ];
                 parse_inputs(inputs, parse_arg);
             }
