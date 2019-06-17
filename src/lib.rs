@@ -160,8 +160,6 @@ pub mod raw {
                             tag!(" vars */")
                             >> ()
                         ))) |
-                        // simple number
-                        complete!(is_a!("-0123456789abcdefx*")) |
                         // It might be a vector ["foo", "bar"]
                         complete!(recognize!(delimited!(char!('['),
                                 separated_list!(tag!(","), map_res!(is_not!("],"), std::str::from_utf8)),
@@ -176,12 +174,16 @@ pub mod raw {
                                 ))) |
                         // literal NULL
                         complete!(tag!("NULL")) |
-                        // a symbolic constant
+                        // a symbolic constant or simple number
                         complete!(recognize!(
-                            is_a!("0123456789_|ABCDEFGHIJKLMNOPQRSTUVWXYZ"))) |
+                            is_a!("0123456789_|ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-*"))) |
                         // It might be a struct {"foo", "bar"}
                         complete!(recognize!(delimited!(char!('{'),
                                 separated_list!(tag!(","), parse_arg),
+                                char!('}')))) |
+                        // It might be a struct {foo bar}
+                        complete!(recognize!(delimited!(char!('{'),
+                                separated_list!(tag!(" "), parse_arg),
                                 char!('}')))) |
                         // ellipsis
                         complete!(tag!("..."))
@@ -519,6 +521,7 @@ pub mod raw {
                     b" O_RDONLY|O_CLOEXEC)",
                     b" st_mode=S_IFREG|0644)",
                     b" st_size=36160,",
+                    b" echo,",
                 ];
                 parse_inputs(inputs, parse_arg);
             }
@@ -529,6 +532,15 @@ pub mod raw {
                     b" {st_mode=S_IFREG|0644, st_size=36160, ...},",
                     b" {st_mode=S_IFREG|0644, st_size=36160, ...})",
                     b" {u32=4294967295, u64=18446744073709551615},",
+                ];
+                parse_inputs(inputs, parse_arg);
+            }
+
+            #[test]
+            fn parse_arg_space_separated_structs() {
+                let inputs: Vec<&[u8]> = vec![
+                    b" {st_mode=S_IFREG|0644, st_size=36160},",
+                    b" {B38400 opost isig icanon echo ...},",
                 ];
                 parse_inputs(inputs, parse_arg);
             }
