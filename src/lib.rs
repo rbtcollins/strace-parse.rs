@@ -174,6 +174,16 @@ pub mod raw {
                                 ))) |
                         // literal NULL
                         complete!(tag!("NULL")) |
+                        // It might be a fn(arg)
+                        complete!(recognize!(
+                            do_parse!(
+                                symbol1 >>
+                                delimited!(char!('('),
+                                separated_list!(tag!(","), parse_arg),
+                                char!(')')) >>
+                                ()
+                                )
+                        )) |
                         // a symbolic constant or simple number
                         complete!(recognize!(
                             is_a!("0123456789_|ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-*"))) |
@@ -514,7 +524,6 @@ pub mod raw {
             }
 
             #[test]
-
             fn parse_arg_symbols() {
                 let inputs: Vec<&[u8]> = vec![
                     b" F_OK,",
@@ -550,6 +559,14 @@ pub mod raw {
                 let inputs: Vec<&[u8]> = vec![
                     b" {EPOLLIN|EPOLLET, {u32=4294967295, u64=18446744073709551615}},",
                     b" {EPOLLIN|EPOLLET, {u32=4294967295, u64=18446744073709551615}})",
+                ];
+                parse_inputs(inputs, parse_arg);
+            }
+
+            #[test]
+            fn parse_fn_calls() {
+                let inputs: Vec<&[u8]> = vec![
+                    b" st_rdev=makedev(1, 9),",
                 ];
                 parse_inputs(inputs, parse_arg);
             }
