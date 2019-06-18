@@ -334,16 +334,19 @@ pub mod raw {
                 pub parse_call<&[u8], Call>,
                 alt!(
                     complete!(do_parse!(e: parse_exit_event >> (e)))
+                    // <... epoll_wait resumed> ....
+                    // must be before unfinished because of:
+                    // 15874 20:12:51.109551 <... epoll_wait resumed> <unfinished ...>) = ?
+                    | complete!(parse_resumed)
                     | complete!(do_parse!(
                         l: terminated!(
                                     map_res!(take_until1!(" <unfinished ...>"),
                              std::str::from_utf8),
-                                    tag!(" <unfinished ...>")) >>
+                                    alt!(complete!(tag!(" <unfinished ...>) = ?")) |
+                                         complete!(tag!(" <unfinished ...>")))) >>
                         eol >>
                         (Call::Unfinished(l.into())))
                     )
-                    // <... epoll_wait resumed> ....
-                    | complete!(parse_resumed)
                     | complete!(parse_signalled)
                     | complete!(do_parse!(
                         call: map_res!(is_not!("("), std::str::from_utf8) >>
@@ -1138,7 +1141,11 @@ pub mod structure {
                                         if let Some(oldcall) =
                                             self.unfinished.insert(syscall.pid, syscall)
                                         {
-                                            panic!("double unfinished rainbow");
+                                            panic!(
+                                                "double unfinished rainbow {:?} {:?}",
+                                                &oldcall,
+                                                self.unfinished.get(&oldcall.pid).unwrap()
+                                            );
                                         }
                                         continue;
                                     }
@@ -1198,6 +1205,9 @@ pub mod structure {
 15876 20:12:50.114686 futex(0x7f1c3c0143f0, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
 15874 20:12:50.115252 <... clock_gettime resumed> {tv_sec=343451, tv_nsec=976375200}) = 0 <0.000545>
 15876 20:12:50.115759 <... futex resumed> ) = 1 <0.000559>
+15879 20:12:51.065041 epoll_wait(4,  <unfinished ...>
+15879 20:12:51.109551 <... epoll_wait resumed> <unfinished ...>) = ?
+15879 20:12:51.110377 +++ exited with 0 +++
 "#.as_bytes();
             let intermediate = raw::parse(strace_content);
             let expected: Vec<raw::Line> = vec![
@@ -1251,6 +1261,20 @@ pub mod structure {
                 start: Some(Duration::from_micros(72770_114686)),
                 stop: Some(Duration::from_micros(72770_115245)),
                 duration: Some(Duration::from_micros(559)),
+            }),
+            Ok(Syscall {
+                pid: 15879,
+                call: Call::Unfinished("epoll_wait(4,".into()),
+                start: Some(Duration::from_micros(72771_065041)),
+                stop: None,
+                duration: None,
+            }),
+            Ok(Syscall {
+                pid: 15879,
+                call: Call::Exited(0),
+                start: Some(Duration::from_micros(72771_110377)),
+                stop: None,
+                duration: None,
             }),
             Ok(Syscall {
                 pid: 15873,
