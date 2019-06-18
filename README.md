@@ -6,6 +6,26 @@ NB: The recommended strace options include : -f -ttt -T -
   -f follow forks (and threads); includes pids for single-thread processes too.
 Other options have various (poor) tradeoffs.
 
+# CLI
+
+## strace-stats
+
+Post-process a regular strace file to get stats such as strace -c would produce.
+
+```
+$ strace-stats FILENAME
+"filename"
+ % time     seconds  usecs/call     calls    errors syscall
+------ ------------ ----------- --------- --------- ----------------
+ 96.86 29670.010031    0.306047     96946           futex
+  1.76   539.832878    4.284388       126           epoll_wait
+  0.64   196.346132    0.009388     20914           close
+  0.27    82.860597    0.000639    129668           write
+  0.21    65.616397    0.003282     19994           fchmod
+```
+
+Known bugs: errors are not reported (the parser is not semantic enough at this point).
+
 # API
 
 Parsing layers(core feature):
