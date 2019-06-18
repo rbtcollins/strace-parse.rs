@@ -262,16 +262,19 @@ pub mod raw {
             )
         );
 
+        // ? or -(number or hext) then comments.Duration
+        // currnetly Unknown is only for standalone ?, ? with comment
+        // goes into Value; as results are not fully modelled. Ugh.
         named!(
                 parse_result<&[u8], CallResult>,
                 alt!(
-                    do_parse!(tag!("?") >> (CallResult::Unknown))
-                    | complete!(do_parse!(val: map_res!(recognize!(do_parse!(
-                        alt!(tag!("-") | is_a!("0123456789xabcdef")) >> 
+                     complete!(do_parse!(val: map_res!(recognize!(do_parse!(
+                        alt!(tag!("-") | is_a!("?0123456789xabcdef")) >> 
                         is_not!(")") >>
                         tag!(")") >>
                         () )), std::str::from_utf8) >> (CallResult::Value(val.into()))))
                     | do_parse!(val: map_res!(is_a!("0123456789xabcdef"), std::str::from_utf8) >> (CallResult::Value(val.into())))
+                    | do_parse!(tag!("?") >> (CallResult::Unknown))
                 )
             );
 
@@ -503,7 +506,12 @@ pub mod raw {
             let (remainder, mut value) = nom!(merge_parser(line.as_bytes()))?;
             if remainder.len() != 0 {
                 return Err(ErrorKind::NomError(
-                    format!("unused input {:?}", std::str::from_utf8(remainder)).into(),
+                    format!(
+                        "unused input {:?} from {:?}",
+                        std::str::from_utf8(remainder),
+                        &line
+                    )
+                    .into(),
                 )
                 .into());
             }
@@ -744,6 +752,21 @@ pub mod raw {
                 Ok(())
             }
 
+            //
+            #[test]
+            fn merge_examples() -> Result<()> {
+                let (u, r) = (&b"15873 20:12:49.689201 poll([{fd=3, events=POLLIN}, {fd=10, events=POLLIN}], 2, 9997 <unfinished ...>\n"[..],
+                &b"15873 20:12:50.070613 <... poll resumed> ) = ? ERESTART_RESTARTBLOCK (Interrupted by signal) <0.380816>\n"[..]);
+
+                let u_p = parser(u)?;
+                assert_eq!(&b""[..], u_p.0);
+                let r_p = parser(r)?;
+                assert_eq!(&b""[..], r_p.0);
+
+                merge_resumed(u_p.1, r_p.1)?;
+                Ok(())
+            }
+
             #[test]
             fn parse_call_unfinished() {
                 let input = &b"set_robust_list(0x7f1c43b009e0, 24 <unfinished ...>\n"[..];
@@ -780,15 +803,20 @@ pub mod raw {
 
             #[test]
             fn result_description1() {
-                let input = &b"-1 ENOENT (No such file or directory)"[..];
-                let result = parse_result(input);
-                assert_eq!(
-                    result,
-                    Ok((
-                        &b""[..],
-                        CallResult::Value("-1 ENOENT (No such file or directory)".into())
-                    ))
-                );
+                let inputs: Vec<&[u8]> = vec![
+                    b"-1 ENOENT (No such file or directory)",
+                    b"? ERESTART_RESTARTBLOCK (Interrupted by signal)",
+                ];
+                for input in inputs.into_iter() {
+                    let result = parse_result(input);
+                    assert_eq!(
+                        result,
+                        Ok((
+                            &b""[..],
+                            CallResult::Value(std::str::from_utf8(input).unwrap().into())
+                        ))
+                    );
+                }
             }
 
             #[test]
