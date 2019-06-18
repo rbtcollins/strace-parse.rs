@@ -129,7 +129,10 @@ pub mod raw {
         };
     }
 
-    mod parsers {
+    pub mod parsers {
+        /// The use of nom is not part of the contract of strace-parse; this is
+        /// solely public to permit the implementation to be well separated
+        /// internally.
         use super::{Call, CallResult, Duration, GenericCall, Syscall};
         use crate::errors::*;
         use nom::character::complete::digit1;
@@ -298,6 +301,7 @@ pub mod raw {
             parse_resumed<&[u8], Call>,
                 do_parse!(
                     delimited!(tag!("<... "), symbol1, tag!(" resumed>")) >>
+                    opt!(complete!(tag!(" "))) >>
                         l: map_res!(
                             recognize!(tuple!(
                                 take_until1!("\n"), // TODO: handle other EOL forms
@@ -717,7 +721,7 @@ pub mod raw {
                     result,
                     Ok((
                         &b""[..],
-                        Call::Resumed(" [], 1024, 0) = 0 <0.000542>\n".into())
+                        Call::Resumed("[], 1024, 0) = 0 <0.000542>\n".into())
                     ))
                 );
                 let r = Syscall::new(1, result.unwrap().1, None, None);
@@ -761,7 +765,7 @@ pub mod raw {
                     result,
                     Ok((
                         &b""[..],
-                        Call::Resumed(" [], 1024, 0) = 0 <0.000542>\n".into())
+                        Call::Resumed("[], 1024, 0) = 0 <0.000542>\n".into())
                     ))
                 );
             }
@@ -1060,7 +1064,182 @@ pub mod raw {
     }
 }
 
-mod structure {}
+pub mod structure {
+    use crate::raw::parsers::merge_resumed;
+    use crate::raw::{Call, Line, Syscall};
+
+    use std::collections::HashMap;
+
+    struct MergeUnfinished<T: Iterator<Item = Line>> {
+        // Underlying iterator
+        input: T,
+        // unfinished syscalls
+        unfinished: HashMap<u32, Syscall>,
+    }
+
+    impl<T: Iterator<Item = Line>> MergeUnfinished<T> {
+        fn find_one(&self) -> Option<u32> {
+            let residue: Vec<(&u32, &Syscall)> = self.unfinished.iter().take(1).collect();
+            for (k, _) in residue.into_iter() {
+                return Some(*k);
+            }
+            None
+        }
+    }
+
+    impl<T: Iterator<Item = Line>> Iterator for MergeUnfinished<T> {
+        type Item = Line;
+
+        fn next(&mut self) -> Option<Self::Item> {
+            loop {
+                match self.input.next() {
+                    None => {
+                        for k in self.find_one() {
+                            // Remaining unfinished syscalls - forward as-is
+                            let syscall = self.unfinished.remove(&k).unwrap();
+                            return Some(Ok(syscall));
+                        }
+                        return None;
+                    }
+                    Some(item) => {
+                        match item {
+                            Err(e) => return Some(Err(e)),
+                            Ok(syscall) => {
+                                match &syscall.call {
+                                    Call::Unfinished(_) => {
+                                        if let Some(oldcall) =
+                                            self.unfinished.insert(syscall.pid, syscall)
+                                        {
+                                            panic!("double unfinished rainbow");
+                                        }
+                                        continue;
+                                    }
+                                    Call::Resumed(_) => {
+                                        match self.unfinished.remove(&syscall.pid) {
+                                            None => {
+                                                // resume without unfinished -
+                                                // forward as-is
+                                                return Some(Ok(syscall));
+                                            }
+                                            Some(unfinished) => {
+                                                return Some(merge_resumed(unfinished, syscall));
+                                            }
+                                        }
+                                    }
+                                    _ => {
+                                        if self.unfinished.contains_key(&syscall.pid) {
+                                            panic!("syscall after unfinished without resume");
+                                        }
+                                        return Some(Ok(syscall));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn iter_finished<T: Iterator<Item = Line>>(input: T) -> impl Iterator<Item = Line> {
+        Box::new(MergeUnfinished {
+            input,
+            unfinished: HashMap::default(),
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use crate::raw;
+        use crate::raw::{Call, CallResult, GenericCall, Syscall};
+
+        use std::time::Duration;
+
+        use super::iter_finished;
+
+        #[test]
+        fn test_iter_finished_syscalls() {
+            let strace_content = r#"15873 20:12:50.110067 futex(0x7ffff644d58c, FUTEX_WAIT_PRIVATE, 0, {tv_sec=29, tv_nsec=996182600} <unfinished ...>
+15874 20:12:50.111078 futex(0x7f1c3c0e4df8, FUTEX_WAKE_PRIVATE, 1) = 1 <0.000037>
+15876 20:12:50.111684 <... futex resumed> ) = 0 <540.139763>
+15874 20:12:50.112197 clock_gettime(CLOCK_MONOTONIC,  <unfinished ...>
+15876 20:12:50.112686 futex(0x7f1c3c014940, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+15874 20:12:50.113193 <... clock_gettime resumed> {tv_sec=343451, tv_nsec=974375300}) = 0 <0.000527>
+15876 20:12:50.113692 <... futex resumed> ) = 0 <0.000514>
+15874 20:12:50.114199 clock_gettime(CLOCK_MONOTONIC,  <unfinished ...>
+15876 20:12:50.114686 futex(0x7f1c3c0143f0, FUTEX_WAKE_PRIVATE, 1 <unfinished ...>
+15874 20:12:50.115252 <... clock_gettime resumed> {tv_sec=343451, tv_nsec=976375200}) = 0 <0.000545>
+15876 20:12:50.115759 <... futex resumed> ) = 1 <0.000559>
+"#.as_bytes();
+            let intermediate = raw::parse(strace_content);
+            let expected: Vec<raw::Line> = vec![
+                Ok(Syscall {
+                pid: 15874,
+                call: Call::Generic(GenericCall {
+                    call:"futex".into(),
+                    args:vec!["0x7f1c3c0e4df8".into(), "FUTEX_WAKE_PRIVATE".into(), "1".into()],
+                    result:CallResult::Value("1".into())
+                }),
+                start: Some(Duration::from_micros(72770_111078)),
+                stop: Some(Duration::from_micros(72770_111115)),
+                duration: Some(Duration::from_micros(37)),
+            }),
+            Ok(Syscall {
+                pid: 15876,
+                call: Call::Resumed(") = 0 <540.139763>\n".into()),
+                start: Some(Duration::from_micros(72770_111684)),
+                stop: None,
+                duration: None,
+            }),
+            Ok(Syscall {
+                pid: 15874,
+                call: Call::Generic(GenericCall {
+                    call:"clock_gettime".into(),
+                    args:vec!["CLOCK_MONOTONIC".into(), "{tv_sec=343451, tv_nsec=974375300}".into()],
+                    result:CallResult::Value("0".into())
+                }),
+                start: Some(Duration::from_micros(72770_112197)),
+                stop: Some(Duration::from_micros(72770_112724)),
+                duration: Some(Duration::from_micros(527)),
+            }),
+            Ok(Syscall {
+                pid: 15876,
+                call: Call::Generic(GenericCall { call: "futex".into(), 
+                args: vec!["0x7f1c3c014940".into(), "FUTEX_WAKE_PRIVATE".into(), "1".into()], result: CallResult::Value("0".into()) }),
+                start: Some(Duration::from_micros(72770_112686)),
+                stop: Some(Duration::from_micros(72770_113200)),
+                duration: Some(Duration::from_micros(514)),
+            }),
+            Ok(Syscall {
+                pid: 15874,
+                call: Call::Generic(GenericCall { call: "clock_gettime".into(), args: vec!["CLOCK_MONOTONIC".into(), "{tv_sec=343451, tv_nsec=976375200}".into()], result: CallResult::Value("0".into()) }),
+                start: Some(Duration::from_micros(72770_114199)),
+                stop: Some(Duration::from_micros(72770_114744)),
+                duration: Some(Duration::from_micros(545)),
+            }),
+            Ok(Syscall {
+                pid: 15876,
+                call: Call::Generic(GenericCall { call: "futex".into(), args: vec!["0x7f1c3c0143f0".into(), "FUTEX_WAKE_PRIVATE".into(), "1".into()], result: CallResult::Value("1".into()) }),
+                start: Some(Duration::from_micros(72770_114686)),
+                stop: Some(Duration::from_micros(72770_115245)),
+                duration: Some(Duration::from_micros(559)),
+            }),
+            Ok(Syscall {
+                pid: 15873,
+                call: Call::Unfinished("futex(0x7ffff644d58c, FUTEX_WAIT_PRIVATE, 0, {tv_sec=29, tv_nsec=996182600}".into()),
+                start: Some(Duration::from_micros(72770_110067)),
+                stop: None,
+                duration: None,
+            }),
+            ];
+            let parsed: Vec<raw::Line> = iter_finished(intermediate).collect();
+            assert_eq!(parsed.len(), expected.len());
+            for (l, r) in parsed.into_iter().zip(expected.into_iter()) {
+                assert_eq!(l.unwrap(), r.unwrap());
+            }
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
