@@ -149,19 +149,65 @@ pub mod raw {
             )
         }
 
+        named!(
+            parse_term,
+            alt!(
+                complete!(recognize!(do_parse!(
+                    symbol1
+                        >> delimited!(
+                            char!('('),
+                            separated_list!(tag!(","), parse_arg),
+                            char!(')')
+                        )
+                        >> ()
+                ))) | complete!(recognize!(is_a!(
+                    "0123456789_|ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz->*"
+                )))
+            )
+        );
+
+        named!(
+            parse_op,
+            recognize!(alt!(
+                complete!(tag!("&&")) | complete!(tag!("||")) | complete!(tag!("=="))
+            ))
+        );
+
+        named!(
+            parse_expr<&[u8], &[u8]>,
+            alt!(
+                // todo: make recursive for arbitrary length exprs
+                recognize!(complete!(tuple!(
+                    parse_term,
+                    tag!(" "),
+                    parse_op,
+                    tag!(" "),
+                    parse_term,
+                    tag!(" "),
+                    parse_op,
+                    tag!(" "),
+                    parse_term
+                    ))) |
+                complete!(parse_term)
+            )
+        );
+
         // Parse a single arg:
         // '6' | '"string\""' | [vector, of things] |
         // '0x1234213 /* 19 vars */ | NULL | F_OK |
         // {..., ...}
         // {arg}
+        // foo && bar
+        // foo || bar
+        // foo == bar
         named!(
             parse_arg,
             do_parse!(
                 opt!(complete!(take_while!(is_space)))
                     >> r: recognize!(do_parse!(
-                        opt!(complete!(terminated!(symbol1, tag!("=")))) >>
-                        opt!(complete!(tag!("&"))) >>
-                            arg: alt!(
+                        opt!(complete!(terminated!(symbol1, tag!("="))))
+                            >> opt!(complete!(tag!("&")))
+                            >> arg: alt!(
                                 // Commented hex
                                 complete!(recognize!(do_parse!(
                             opt!(complete!(is_a!("0123456789abcdefx"))) >>
@@ -192,18 +238,10 @@ pub mod raw {
                         // literal NULL
                         complete!(tag!("NULL")) |
                         // It might be a fn(arg)
-                        complete!(recognize!(
-                            do_parse!(
-                                symbol1 >>
-                                delimited!(char!('('),
-                                separated_list!(tag!(","), parse_arg),
-                                char!(')')) >>
-                                ()
-                                )
-                        )) |
-                        // a symbolic constant or simple number or mapping? (12->34)
-                        complete!(recognize!(
-                            is_a!("0123456789_|ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz->*"))) |
+                        // a symbolic constant or simple number or mapping or
+                        // expresions...? (12->34)
+                        // argh really need to rework this hole thing bottom up.
+                        complete!(recognize!(parse_expr)) |
                         // It might be a struct {"foo", "bar"}
                         complete!(recognize!(delimited!(char!('{'),
                                 separated_list!(tag!(","), parse_arg),
@@ -275,7 +313,7 @@ pub mod raw {
             parse_signalled<&[u8], Call>,
             delimited!(tag!("--- "),
             do_parse!(
-                symbol1 >> 
+                symbol1 >>
                 v: map_res!(parse_arg, std::str::from_utf8) >>
                 (Call::Signalled(v.into()))
 
@@ -571,6 +609,7 @@ pub mod raw {
                     b" st_size=36160,",
                     b" echo,",
                     b" &sin6_addr,",
+                    b" WIFEXITED(s) && WEXITSTATUS(s) == 0,",
                 ];
                 parse_inputs(inputs, parse_arg);
             }
