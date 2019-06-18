@@ -3,6 +3,16 @@ name = "strace-parse"
 version = "0.1.0"
 authors = ["Robert Collins <robertc@robertcollins.net>"]
 edition = "2018"
+description = "Parser and utilities for strace files"
+homepage = "https://github.com/rbtcollins/strace-parse.rs"
+repository = "http://github.com/rbtcollins/strace-parse.rs"
+readme = "README.md"
+keywords = ["strace", "parser", "analyser", "nom"]
+categories = ["command-line-utilities", "development-tools::debugging", "development-tools::profiling", "parser-implementations", ]
+license = "Apache-2.0"
+
+[badges]
+maintenance = { status = "actively-developed" }
 
 [dependencies]
 error-chain = "0"
