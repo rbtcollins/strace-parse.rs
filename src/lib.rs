@@ -469,6 +469,7 @@ pub mod raw {
         named!(
                 pub parser<&[u8], Syscall>,
                 do_parse!(pid: opt!(parse_pid)  >>
+                    opt!(complete!(tag!(" "))) >>
                     start: parse_start >>
                     call: parse_call >>
                     duration: parse_duration >>
@@ -864,24 +865,33 @@ pub mod raw {
 
             #[test]
             fn test_parser() {
-                let inputs: Vec<&[u8]> = vec![b"1 set(0) <unfinished ...>\n"];
+                let cases: Vec<(&[u8], Syscall)> = vec![
+                    (
+                        b"1 set(0) <unfinished ...>\n",
+                        Syscall {
+                            pid: Some(1),
+                            call: Call::Unfinished("set(0)".into()),
+                            start: None,
+                            stop: None,
+                            duration: None,
+                        },
+                    ),
+                    (
+                        b"2064  1560918200.817883 <... set_robust_list resumed> ) = 0 <0.000155>\n",
+                        Syscall {
+                            pid: Some(2064),
+                            call: Call::Resumed(") = 0 <0.000155>\n".into()),
+                            start: Some(Duration::from_micros(1560918200_817883)),
+                            stop: None,
+                            duration: None,
+                        },
+                    ),
+                ];
 
-                for input in inputs.into_iter() {
+                for (input, output) in cases.into_iter() {
                     let input = &input[..];
                     let result = parser(input);
-                    assert_eq!(
-                        result,
-                        Ok((
-                            &b""[..],
-                            Syscall {
-                                pid: Some(1),
-                                call: Call::Unfinished("set(0)".into()),
-                                start: None,
-                                stop: None,
-                                duration: None
-                            }
-                        ))
-                    );
+                    assert_eq!(result, Ok((&b""[..], output)));
                 }
             }
         }
