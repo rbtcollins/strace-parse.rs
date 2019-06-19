@@ -203,12 +203,13 @@ pub mod raw {
         // foo && bar
         // foo || bar
         // foo == bar
+        // foo(1)=[...]
         named!(
             parse_arg,
             do_parse!(
                 opt!(complete!(take_while!(is_space)))
                     >> r: recognize!(do_parse!(
-                        opt!(complete!(terminated!(symbol1, tag!("="))))
+                        opt!(complete!(terminated!(parse_term, tag!("="))))
                             >> opt!(complete!(tag!("&")))
                             >> arg: alt!(
                                 // Commented hex
@@ -587,6 +588,7 @@ pub mod raw {
                     b" [{msg_hdr={msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base=\" l\\1\\0\\0\\1\\0\\0\\0\\0\\0\\0\\6static\\trust-lang\\3or\"..., iov_len=38}], msg_iovlen=1, msg_controllen=0, msg_flags=MSG_TRUNC|MSG_DONTWAIT|MSG_FIN|MSG_SYN|MSG_CONFIRM|MSG_ZEROCOPY|MSG_FASTOPEN|0x10000010}, msg_len=38}, {msg_hdr={msg_name=NULL, msg_namelen=0, msg_iov=[{iov_base=\"R9\\1\\0\\0\\1\\0\\0\\0\\0\\0\\0\\6static\\trust-lang\\3or\"..., iov_len=38}], msg_iovlen=1, msg_controllen=0, msg_flags=MSG_EOR|MSG_WAITALL|MSG_NOSIGNAL|MSG_MORE|MSG_BATCH|MSG_CMSG_CLOEXEC|0x38a0000}, msg_len=38}],",
                     b" [RTMIN RT_1],", // space delimited
                     b" [28->16],", // Mappings?
+                    b" msg_iov(1)=[],", // named vector
                 ];
                 parse_inputs(inputs, parse_arg);
             }
@@ -599,7 +601,7 @@ pub mod raw {
                     b" 0x7ffff2435d98 /* 19 vars */)",              // last arg
                     b" 0x14 /* NLMSG_??? */,",                      // Enum comment
                     b" 1558857830 /* 2019-05-26T20:03:50+1200 */,", // datestamp comment
-                    b" /* 12 entries */,",                          // pure comemnt
+                    b" /* 12 entries */,",                          // pure comment
                 ];
                 parse_inputs(inputs, parse_arg);
             }
