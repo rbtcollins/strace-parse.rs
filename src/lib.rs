@@ -1123,6 +1123,9 @@ pub mod structure {
         input: T,
         // unfinished syscalls
         unfinished: HashMap<Option<u32>, Syscall>,
+        // finished but yet to be iterated syscall
+        // used when a call evicts an unfinished call.
+        next: Option<Syscall>,
     }
 
     impl<T: Iterator<Item = Line>> MergeUnfinished<T> {
@@ -1140,6 +1143,12 @@ pub mod structure {
 
         fn next(&mut self) -> Option<Self::Item> {
             loop {
+                if self.next.is_some() {
+                    let next = std::mem::replace(&mut self.next, None);
+                    return next.and_then(|next| 
+                        Some(Ok(next))
+                    );
+                }
                 match self.input.next() {
                     None => {
                         for k in self.find_one() {
@@ -1152,7 +1161,7 @@ pub mod structure {
                     Some(item) => {
                         match item {
                             Err(e) => return Some(Err(e)),
-                            Ok(syscall) => {
+                            Ok(mut syscall) => {
                                 match &syscall.call {
                                     Call::Unfinished(_) => {
                                         if let Some(oldcall) =
@@ -1180,7 +1189,14 @@ pub mod structure {
                                     }
                                     _ => {
                                         if self.unfinished.contains_key(&syscall.pid) {
-                                            panic!("syscall after unfinished without resume");
+                                            // The old event is something like
+                                            // poll(), the new event will be
+                                            // something like a group exit.
+                                            // Forward the old event, stash the
+                                            // new one for the next next() call.
+                                            let result = self.unfinished.remove(&syscall.pid).unwrap();
+                                            self.next = Some(syscall);
+                                            syscall = result;
                                         }
                                         return Some(Ok(syscall));
                                     }
@@ -1197,6 +1213,7 @@ pub mod structure {
         Box::new(MergeUnfinished {
             input,
             unfinished: HashMap::default(),
+            next: None,
         })
     }
 
@@ -1225,6 +1242,8 @@ pub mod structure {
 15879 20:12:51.065041 epoll_wait(4,  <unfinished ...>
 15879 20:12:51.109551 <... epoll_wait resumed> <unfinished ...>) = ?
 15879 20:12:51.110377 +++ exited with 0 +++
+2064  1560918478.324920 epoll_wait(5,  <unfinished ...>
+2064  1560918478.352466 +++ exited with 0 +++
 "#.as_bytes();
             let intermediate = raw::parse(strace_content);
             let expected: Vec<raw::Line> = vec![
@@ -1290,6 +1309,20 @@ pub mod structure {
                 pid: Some(15879),
                 call: Call::Exited(0),
                 start: Some(Duration::from_micros(72771_110377)),
+                stop: None,
+                duration: None,
+            }),
+            Ok(Syscall {
+                pid: Some(2064),
+                call: Call::Unfinished("epoll_wait(5, ".into()),
+                start: Some(Duration::from_micros(1560918478_324920)),
+                stop: None,
+                duration: None,
+            }),
+            Ok(Syscall {
+                pid: Some(2064),
+                call: Call::Exited(0),
+                start: Some(Duration::from_micros(1560918478_352466)),
                 stop: None,
                 duration: None,
             }),
