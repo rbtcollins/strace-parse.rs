@@ -1145,9 +1145,7 @@ pub mod structure {
             loop {
                 if self.next.is_some() {
                     let next = std::mem::replace(&mut self.next, None);
-                    return next.and_then(|next| 
-                        Some(Ok(next))
-                    );
+                    return next.and_then(|next| Some(Ok(next)));
                 }
                 match self.input.next() {
                     None => {
@@ -1194,7 +1192,8 @@ pub mod structure {
                                             // something like a group exit.
                                             // Forward the old event, stash the
                                             // new one for the next next() call.
-                                            let result = self.unfinished.remove(&syscall.pid).unwrap();
+                                            let result =
+                                                self.unfinished.remove(&syscall.pid).unwrap();
                                             self.next = Some(syscall);
                                             syscall = result;
                                         }
