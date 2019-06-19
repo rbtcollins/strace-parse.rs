@@ -1,6 +1,6 @@
 [package]
 name = "strace-parse"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Robert Collins <robertc@robertcollins.net>"]
 edition = "2018"
 description = "Parser and utilities for strace files"
