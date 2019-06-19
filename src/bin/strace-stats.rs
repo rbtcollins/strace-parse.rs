@@ -65,11 +65,17 @@ fn main() -> Result<()> {
         for row in calls.into_iter() {
             let row_time = row.1.duration.as_micros() as f64 / 1_000_000.0;
             let per_call = row_time / row.1.calls as f64;
-            let percent:f64 = row_time / total_time * 100.0;
-            println!("{:6.2} {:12.6} {:11.6} {:9} {:9} {}", percent, row_time, per_call, row.1.calls, " ", row.0);
+            let percent: f64 = row_time / total_time * 100.0;
+            println!(
+                "{:6.2} {:12.6} {:11.6} {:9} {:9} {}",
+                percent, row_time, per_call, row.1.calls, " ", row.0
+            );
         }
         println!("------ ------------ ----------- --------- --------- ----------------");
-        println!("100.00 {:12.6}             {:9}           total",  total_time, total_calls);
+        println!(
+            "100.00 {:12.6}             {:9}           total",
+            total_time, total_calls
+        );
         // % time     seconds  usecs/call     calls    errors syscall
         // ------ ----------- ----------- --------- --------- ----------------
         //   0.00    0.000000           0         8           read

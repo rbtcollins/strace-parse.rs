@@ -85,7 +85,7 @@ pub mod raw {
 
     #[derive(Clone, Hash, Eq, Debug, PartialEq)]
     pub struct Syscall {
-        pub pid: u32,
+        pub pid: Option<u32>,
         /// When the system call started, if known.
         pub start: Option<Duration>,
         pub call: Call,
@@ -100,7 +100,7 @@ pub mod raw {
 
     impl Syscall {
         pub fn new(
-            pid: u32,
+            pid: Option<u32>,
             call: Call,
             start: Option<Duration>,
             duration: Option<Duration>,
@@ -468,7 +468,7 @@ pub mod raw {
 
         named!(
                 pub parser<&[u8], Syscall>,
-                do_parse!(pid: parse_pid  >>
+                do_parse!(pid: opt!(parse_pid)  >>
                     start: parse_start >>
                     call: parse_call >>
                     duration: parse_duration >>
@@ -482,7 +482,7 @@ pub mod raw {
                 call: parse_call >>
                 duration: parse_duration >>
                 opt!(complete!(eol)) >>
-                (Syscall::new(0, call, None, duration)))
+                (Syscall::new(None, call, None, duration)))
         );
 
         /// Merge an unfinished and a resumed syscall.
@@ -724,7 +724,12 @@ pub mod raw {
                     result,
                     Ok((&b""[..], Call::Unfinished("epoll_wait(4, ".into())))
                 );
-                let u = Syscall::new(1, result.unwrap().1, Some(Duration::from_secs(500)), None);
+                let u = Syscall::new(
+                    Some(1),
+                    result.unwrap().1,
+                    Some(Duration::from_secs(500)),
+                    None,
+                );
 
                 let input = &b"<... epoll_wait resumed> [], 1024, 0) = 0 <0.000542>\n"[..];
                 let result = parse_call(input);
@@ -735,13 +740,13 @@ pub mod raw {
                         Call::Resumed("[], 1024, 0) = 0 <0.000542>\n".into())
                     ))
                 );
-                let r = Syscall::new(1, result.unwrap().1, None, None);
+                let r = Syscall::new(Some(1), result.unwrap().1, None, None);
 
                 let result = merge_resumed(u, r)?;
                 assert_eq!(
                     result,
                     Syscall {
-                        pid: 1,
+                        pid: Some(1),
                         call: Call::Generic(GenericCall {
                             call: "epoll_wait".into(),
                             args: vec!["4".into(), "[]".into(), "1024".into(), "0".into()],
@@ -869,7 +874,7 @@ pub mod raw {
                         Ok((
                             &b""[..],
                             Syscall {
-                                pid: 1,
+                                pid: Some(1),
                                 call: Call::Unfinished("set(0)".into()),
                                 start: None,
                                 stop: None,
@@ -1105,12 +1110,12 @@ pub mod structure {
         // Underlying iterator
         input: T,
         // unfinished syscalls
-        unfinished: HashMap<u32, Syscall>,
+        unfinished: HashMap<Option<u32>, Syscall>,
     }
 
     impl<T: Iterator<Item = Line>> MergeUnfinished<T> {
-        fn find_one(&self) -> Option<u32> {
-            let residue: Vec<(&u32, &Syscall)> = self.unfinished.iter().take(1).collect();
+        fn find_one(&self) -> Option<Option<u32>> {
+            let residue: Vec<(&Option<u32>, &Syscall)> = self.unfinished.iter().take(1).collect();
             for (k, _) in residue.into_iter() {
                 return Some(*k);
             }
@@ -1212,7 +1217,7 @@ pub mod structure {
             let intermediate = raw::parse(strace_content);
             let expected: Vec<raw::Line> = vec![
                 Ok(Syscall {
-                pid: 15874,
+                pid: Some(15874),
                 call: Call::Generic(GenericCall {
                     call:"futex".into(),
                     args:vec!["0x7f1c3c0e4df8".into(), "FUTEX_WAKE_PRIVATE".into(), "1".into()],
@@ -1223,14 +1228,14 @@ pub mod structure {
                 duration: Some(Duration::from_micros(37)),
             }),
             Ok(Syscall {
-                pid: 15876,
+                pid: Some(15876),
                 call: Call::Resumed(") = 0 <540.139763>\n".into()),
                 start: Some(Duration::from_micros(72770_111684)),
                 stop: None,
                 duration: None,
             }),
             Ok(Syscall {
-                pid: 15874,
+                pid: Some(15874),
                 call: Call::Generic(GenericCall {
                     call:"clock_gettime".into(),
                     args:vec!["CLOCK_MONOTONIC".into(), "{tv_sec=343451, tv_nsec=974375300}".into()],
@@ -1241,7 +1246,7 @@ pub mod structure {
                 duration: Some(Duration::from_micros(527)),
             }),
             Ok(Syscall {
-                pid: 15876,
+                pid: Some(15876),
                 call: Call::Generic(GenericCall { call: "futex".into(), 
                 args: vec!["0x7f1c3c014940".into(), "FUTEX_WAKE_PRIVATE".into(), "1".into()], result: CallResult::Value("0".into()) }),
                 start: Some(Duration::from_micros(72770_112686)),
@@ -1249,35 +1254,35 @@ pub mod structure {
                 duration: Some(Duration::from_micros(514)),
             }),
             Ok(Syscall {
-                pid: 15874,
+                pid: Some(15874),
                 call: Call::Generic(GenericCall { call: "clock_gettime".into(), args: vec!["CLOCK_MONOTONIC".into(), "{tv_sec=343451, tv_nsec=976375200}".into()], result: CallResult::Value("0".into()) }),
                 start: Some(Duration::from_micros(72770_114199)),
                 stop: Some(Duration::from_micros(72770_114744)),
                 duration: Some(Duration::from_micros(545)),
             }),
             Ok(Syscall {
-                pid: 15876,
+                pid: Some(15876),
                 call: Call::Generic(GenericCall { call: "futex".into(), args: vec!["0x7f1c3c0143f0".into(), "FUTEX_WAKE_PRIVATE".into(), "1".into()], result: CallResult::Value("1".into()) }),
                 start: Some(Duration::from_micros(72770_114686)),
                 stop: Some(Duration::from_micros(72770_115245)),
                 duration: Some(Duration::from_micros(559)),
             }),
             Ok(Syscall {
-                pid: 15879,
+                pid: Some(15879),
                 call: Call::Unfinished("epoll_wait(4,".into()),
                 start: Some(Duration::from_micros(72771_065041)),
                 stop: None,
                 duration: None,
             }),
             Ok(Syscall {
-                pid: 15879,
+                pid: Some(15879),
                 call: Call::Exited(0),
                 start: Some(Duration::from_micros(72771_110377)),
                 stop: None,
                 duration: None,
             }),
             Ok(Syscall {
-                pid: 15873,
+                pid: Some(15873),
                 call: Call::Unfinished("futex(0x7ffff644d58c, FUTEX_WAIT_PRIVATE, 0, {tv_sec=29, tv_nsec=996182600}".into()),
                 start: Some(Duration::from_micros(72770_110067)),
                 stop: None,
@@ -1299,6 +1304,32 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn nopid() {
+        let strace_content = r#"execve("./target/debug/rustup", ["./target/debug/rustup", "uninstall", "nightly"], 0x7fffedc2f180 /* 20 vars */) = 0 <0.005029>
+"#.as_bytes();
+        let parsed: Vec<super::raw::Line> = super::raw::parse(strace_content).collect();
+        let expected: Vec<super::raw::Line> = vec![Ok(Syscall {
+            pid: None,
+            call: Call::Generic(GenericCall {
+                call: "execve".into(),
+                args: vec![
+                    r#""./target/debug/rustup""#.into(),
+                    r#"["./target/debug/rustup", "uninstall", "nightly"]"#.into(),
+                    "0x7fffedc2f180 /* 20 vars */".into(),
+                ],
+                result: CallResult::Value("0".into()),
+            }),
+            start: None,
+            stop: None,
+            duration: Some(Duration::from_micros(5029)),
+        })];
+        assert_eq!(parsed.len(), expected.len());
+        for (l, r) in parsed.into_iter().zip(expected.into_iter()) {
+            assert_eq!(l.unwrap(), r.unwrap());
+        }
+    }
+
+    #[test]
     fn durationonly() {
         let strace_content = r#"15860 execve("./target/debug/rustup", ["./target/debug/rustup", "uninstall", "nightly"], 0x7fffedc2f180 /* 20 vars */) = 0 <0.005029>
 15860 brk(NULL)                         = 0x7fffc415f000 <0.000034>
@@ -1308,7 +1339,7 @@ mod tests {
         let parsed: Vec<super::raw::Line> = super::raw::parse(strace_content).collect();
         let expected: Vec<super::raw::Line> = vec![
             Ok(Syscall {
-                pid: 15860,
+                pid: Some(15860),
                 call: Call::Generic(GenericCall {
                     call: "execve".into(),
                     args: vec![
@@ -1323,7 +1354,7 @@ mod tests {
                 duration: Some(Duration::from_micros(5029)),
             }),
             Ok(Syscall {
-                pid: 15860,
+                pid: Some(15860),
                 call: Call::Generic(GenericCall {
                     call: "brk".into(),
                     args: vec!["NULL".into()],
@@ -1334,7 +1365,7 @@ mod tests {
                 duration: Some(Duration::from_micros(34)),
             }),
             Ok(Syscall {
-                pid: 15860,
+                pid: Some(15860),
                 call: Call::Generic(GenericCall {
                     call: "exit_group".into(),
                     args: vec!["0".into()],
@@ -1345,7 +1376,7 @@ mod tests {
                 duration: None,
             }),
             Ok(Syscall {
-                pid: 15860,
+                pid: Some(15860),
                 call: Call::Exited(0),
                 start: None,
                 stop: None,
@@ -1368,7 +1399,7 @@ mod tests {
         let parsed: Vec<super::raw::Line> = super::raw::parse(strace_content).collect();
         let expected: Vec<super::raw::Line> = vec![
             Ok(Syscall {
-                pid: 15873,
+                pid: Some(15873),
                 call: Call::Generic(GenericCall {
                     call: "execve".into(),
                     args: vec![
@@ -1387,7 +1418,7 @@ mod tests {
                 duration: Some(Duration::from_micros(8768)),
             }),
             Ok(Syscall {
-                pid: 15873,
+                pid: Some(15873),
                 call: Call::Generic(GenericCall {
                     call: "brk".into(),
                     args: vec!["NULL".into()],
@@ -1402,7 +1433,7 @@ mod tests {
                 duration: Some(Duration::from_micros(58)),
             }),
             Ok(Syscall {
-                pid: 16135,
+                pid: Some(16135),
                 call: Call::Generic(GenericCall {
                     call: "exit_group".into(),
                     args: vec!["0".into()],
@@ -1415,7 +1446,7 @@ mod tests {
                 duration: None,
             }),
             Ok(Syscall {
-                pid: 16135,
+                pid: Some(16135),
                 call: Call::Exited(0),
                 start: Some(Duration::from_micros(
                     50_070014 + (((20 * 60) + 12) * 60 * 1_000000),
@@ -1439,7 +1470,7 @@ mod tests {
         let parsed: Vec<super::raw::Line> = super::raw::parse(strace_content).collect();
         let expected: Vec<super::raw::Line> = vec![
             Ok(Syscall {
-                pid: 1,
+                pid: Some(1),
                 call: Call::Generic(GenericCall {
                     call: "exit_group".into(),
                     args: vec!["0".into()],
@@ -1452,7 +1483,7 @@ mod tests {
                 duration: None,
             }),
             Ok(Syscall {
-                pid: 2,
+                pid: Some(2),
                 call: Call::Exited(0),
                 start: Some(Duration::from_micros(
                     00_000001 + (((24 * 60) + 0) * 60 * 1_000000),
@@ -1478,7 +1509,7 @@ mod tests {
         let parsed: Vec<super::raw::Line> = super::raw::parse(strace_content).collect();
         let expected: Vec<super::raw::Line> = vec![
             Ok(Syscall {
-                pid: 1,
+                pid: Some(1),
                 call: Call::Generic(GenericCall {
                     call: "exit_group".into(),
                     args: vec!["0".into()],
@@ -1489,7 +1520,7 @@ mod tests {
                 duration: None,
             }),
             Ok(Syscall {
-                pid: 2,
+                pid: Some(2),
                 call: Call::Exited(0),
                 start: Some(Duration::from_micros(1560417690_082832)),
                 stop: Some(Duration::from_micros(1560417690_082832 + 58)),
