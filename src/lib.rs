@@ -1004,7 +1004,7 @@ pub mod raw {
         }
 
         fn dispatch_lines(&mut self) -> Option<Option<Line>> {
-            for _ in 1..self.threadpool.get_mut().max_count() {
+            for _ in 0..self.threadpool.get_mut().max_count() {
                 if !self.finished_reading {
                     if let Err(e) = self.dispatch_line() {
                         return Some(Some(Err(e)));
