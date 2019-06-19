@@ -977,7 +977,7 @@ pub mod raw {
                         }
                     }
                     Err(e) => {
-                        println!("Failed {:?}", std::str::from_utf8(line));
+                        println!("Failed {:?} {:?}", std::str::from_utf8(line).unwrap(), e);
                         Err(e)
                     }
                 };
