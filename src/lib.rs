@@ -35,7 +35,6 @@ pub mod errors {
             Error::from_kind(ErrorKind::NomError(desc))
         }
     }
-
 }
 
 pub mod raw {
@@ -139,8 +138,8 @@ pub mod raw {
         use nom::character::is_space;
         use nom::{
             alt, char, complete, delimited, do_parse, escaped, is_a, is_not, map_res, named,
-            one_of, opt, recognize, separated_list, tag, take_until1, take_while, terminated,
-            tuple, AsChar, InputTakeAtPosition,
+            none_of, one_of, opt, recognize, separated_list, tag, take_until1, take_while,
+            terminated, tuple, AsChar, InputTakeAtPosition,
         };
 
         pub fn symbol1<'a, E: nom::error::ParseError<&'a [u8]>>(
@@ -198,6 +197,7 @@ pub mod raw {
         // Parse a single arg:
         // '6' | '"string\""' | [vector, of things] |
         // '0x1234213 /* 19 vars */ | NULL | F_OK |
+        // 3</path>
         // {..., ...}
         // {arg}
         // foo && bar
@@ -215,12 +215,20 @@ pub mod raw {
                                 // Commented hex
                                 complete!(recognize!(do_parse!(
                             opt!(complete!(is_a!("0123456789abcdefx"))) >>
-                            opt!(complete!(tag!(" "))) >>
-                            tag!("/* ") >> 
-                            opt!(complete!(is_a!("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_-:+"))) >>
-                            opt!(complete!(tag!("???"))) >>
-                            opt!(alt!(complete!(tag!(" vars")) | complete!(tag!(" entries")) )) >>
-                            tag!(" */")
+                            alt!(
+                                do_parse!(opt!(complete!(tag!(" "))) >>
+                                tag!("/* ") >> 
+                                opt!(complete!(is_a!("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_-:+"))) >>
+                                opt!(complete!(tag!("???"))) >>
+                                opt!(alt!(complete!(tag!(" vars")) | complete!(tag!(" entries")) )) >>
+                                tag!(" */") >> ()) |
+                                do_parse!(
+                                    tag!("<") >>
+                                    escaped!(none_of!(">\\\n"), '\\', one_of!(">\\n")) >>
+                                    tag!(">")
+                                     >> ())
+                            )
+
                             >> ()
                         ))) |
                         // It might be a vector ["foo", "bar", arg]
@@ -263,8 +271,8 @@ pub mod raw {
             )
         );
 
-        // ? or -(number or hext) then comments.Duration
-        // currnetly Unknown is only for standalone ?, ? with comment
+        // ? or -(number or hex) then comments.Duration
+        // currently Unknown is only for standalone ?, ? with comment
         // goes into Value; as results are not fully modelled. Ugh.
         named!(
                 parse_result<&[u8], CallResult>,
@@ -457,7 +465,7 @@ pub mod raw {
                 )
             );
 
-        /// The pid "1234 "
+        // The pid "1234 "
         named!(parse_pid<&[u8], u32>,
                 complete!(map_res!(
                     map_res!(
@@ -554,9 +562,10 @@ pub mod raw {
                 assert_eq!(result, Ok((&b","[..], &b"2"[..])));
 
                 let inputs: Vec<&[u8]> = vec![
-                    b" 2)",         // end of args
-                    b" -1,",        // not end of args, negatives
-                    b" 8192*1024)", // Multiplication ?
+                    b" 2)",                   // end of args
+                    b" -1,",                  // not end of args, negatives
+                    b" 8192*1024)",           // Multiplication ?
+                    b" 3</etc/ld.so.cache>)", // File descriptor
                 ];
                 parse_inputs(inputs, parse_arg);
             }
