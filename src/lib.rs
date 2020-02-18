@@ -243,7 +243,7 @@ pub mod raw {
                         complete!(recognize!(
                             do_parse!(
                                 delimited!(char!('"'),
-                                escaped!(is_not!("\"\\"), '\\', one_of!("\"n\\0123456789vrtxf")),
+                                opt!(escaped!(is_not!("\"\\"), '\\', one_of!("\"n\\0123456789vrtxf"))),
                                 char!('"')) >>
                                 opt!(tag!("...")) >> ()
                                 ))) |
